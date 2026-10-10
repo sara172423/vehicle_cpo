@@ -1,0 +1,103 @@
+# ============================================================
+# vehicle_cpo - Git ignore rules
+# MATLAB research project + optional Python conversion utility
+# ============================================================
+
+# ----------------------------
+# MATLAB temporary / generated
+# ----------------------------
+*.asv
+*.m~
+*.autosave
+*.mex*
+*.mlappinstall
+slprj/
+codegen/
+cache/
+*.log
+
+# MATLAB local settings / history
+MATLABCrashDump.*
+matlab_crash_dump.*
+*.stackdump
+
+# ----------------------------
+# Python temporary files
+# ----------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Python virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# ----------------------------
+# Secrets / local environment
+# ----------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ----------------------------
+# Database dumps / raw imports
+# Keep data/dataset.json tracked.
+# ----------------------------
+*.sql
+*.dump
+*.backup
+data/raw/
+
+# ----------------------------
+# Temporary / archive files
+# ----------------------------
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+~$*
+*.zip
+*.7z
+*.rar
+
+# ----------------------------
+# IDE / editor files
+# ----------------------------
+.vscode/
+.idea/
+*.code-workspace
+
+# ----------------------------
+# Operating-system files
+# ----------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ----------------------------
+#results
+# ----------------------------
+results/
+
+# ----------------------------
+# Local notes / personal files
+# ----------------------------
+notes.local.*
+*.local
+
