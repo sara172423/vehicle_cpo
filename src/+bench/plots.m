@@ -7,6 +7,28 @@ function plots(results, cfg)
     if ~isfolder(out)
         mkdir(out);
     end
+
+    % Different fitness definitions can have different numerical score scales.
+    % When several fitnesses are requested in one experiment, export one plot
+    % set per fitness instead of drawing incomparable objective scales together.
+    if isfield(results.raw, 'fitness_id') && ~isempty(results.raw)
+        ids = unique({results.raw.fitness_id}, 'stable');
+        if numel(ids) > 1
+            for q = 1:numel(ids)
+                id = ids{q};
+                sub = results;
+                sub.raw = selectFitness(results.raw, id);
+                sub.summary = selectFitness(results.summary, id);
+                sub.convergence = selectFitness(results.convergence, id);
+                sub.nfeSummary = selectFitness(results.nfeSummary, id);
+                c = cfg;
+                c.outputDir = fullfile(out, id);
+                bench.plots(sub, c);
+            end
+            return
+        end
+    end
+
     rows = results.summary;
 
     switch results.figure
@@ -23,7 +45,11 @@ function plots(results, cfg)
             last = max([results.raw.iteration]);
             set(gca, 'XTick', 0:max(1, ceil(last / 10)):last);
             xlabel('Number of iterations');
-            ylabel('Total offloading efficiency');
+            if isfield(results.raw, 'fitness_id') && ~isempty(results.raw) && ~strcmp(results.raw(1).fitness_id, 'fitness_1')
+                ylabel('Optimization score');
+            else
+                ylabel('Total offloading efficiency');
+            end
             finishAxes(gca);
             legend('Location', 'best', 'Box', 'off');
             saveFigure(f, out, 'figure_6');
@@ -31,9 +57,12 @@ function plots(results, cfg)
 
             f = newFigure([100 100 1000 650]);
             n = results.nfeSummary;
+            yLabel = 'Best-so-far total offloading efficiency';
+            if ~isempty(n) && isfield(n, 'fitness_id') && ~strcmp(n(1).fitness_id, 'fitness_1')
+                yLabel = 'Best-so-far optimization score';
+            end
             panel(n, 'function_evaluations', 'best_total_efficiency', ...
-                  'Objective function evaluations (NFE)', ...
-                  'Best-so-far total offloading efficiency');
+                  'Objective function evaluations (NFE)', yLabel);
             saveFigure(f, out, 'figure_6_nfe');
             close(f);
             return
@@ -307,23 +336,7 @@ function st = algorithmStyle(name, index)
             st.color = palette(1, :);
             st.marker = 'o';
             st.lineStyle = '-';
-        case 'dtosc'
-            st.color = palette(3, :);
-            st.marker = '^';
-            st.lineStyle = '-.';
-        case 'to_v2i'
-            st.color = palette(5, :);
-            st.marker = 'd';
-            st.lineStyle = ':';
-        case 'to_wo_c'
-            st.color = palette(2, :);
-            st.marker = 'v';
-            st.lineStyle = '--';
-        case 'to_wo_r'
-            st.color = palette(7, :);
-            st.marker = 'p';
-            st.lineStyle = ':';
-        case {'gwo', 'gwo_aco'}
+        case 'gwo'
             st.color = palette(4, :);
             st.marker = 's';
             st.lineStyle = '--';
@@ -360,14 +373,21 @@ function st = algorithmStyle(name, index)
 end
 
 function s = label(n)
-    names = {'dcsga', 'dtosc', 'to_v2i', 'to_wo_c', 'to_wo_r', 'gwo', 'gwo_aco', 'gpc', 'cpo', 'dcpo_base', 'dcpo_criticality', 'dcpo_cache', 'puma'};
-    labels = {'DCSGA', 'DTOSC', 'TO-V2I', 'TO-w.o.-C', 'TO-w.o.-R', 'D-GWO', 'D-GWO', 'D-GPC', 'DCC-DCPO', 'DCPO-base', 'DCPO+C', 'DCPO+K', 'D-PO'};
+    names = {'dcsga', 'gwo', 'gpc', 'cpo', 'dcpo_base', 'dcpo_criticality', 'dcpo_cache', 'puma'};
+    labels = {'DCSGA/Cuckoo', 'D-GWO', 'D-GPC', 'DCC-DCPO', 'DCPO-base', 'DCPO+C', 'DCPO+K', 'D-Puma'};
     ix = find(strcmp(n, names), 1);
     if isempty(ix)
         s = n;
     else
         s = labels{ix};
     end
+end
+
+function rows = selectFitness(rows, id)
+    if isempty(rows) || ~isfield(rows, 'fitness_id')
+        return
+    end
+    rows = rows(strcmp({rows.fitness_id}, id));
 end
 
 function saveFigure(f, out, name)

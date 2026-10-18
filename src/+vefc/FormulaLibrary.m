@@ -57,12 +57,26 @@ classdef FormulaLibrary
             v = 128.1 + 37.6 * log10(max(d, 1) / 1000);
         end
 
-        function v = v2vPathLoss(d)
-            v = 22.7 * log10(max(d, 10)) + 41 + 20 * log10(2 / 5);
+        function v = v2vPathLoss(d, htx, hrx, fGHz)
+            % WINNER+ B1 LOS model used by the article's cited channel source [33].
+            if nargin < 2, htx = 1.5; end
+            if nargin < 3, hrx = 1.5; end
+            if nargin < 4, fGHz = 2.0; end
+            d = max(double(d), 0);
+            dbp = 4 * (htx - 1) * (hrx - 1) * fGHz * 1e9 / 3e8;
+            A = 22.7; B = 41; C = 20;
+            if d <= 3
+                v = A * log10(3) + B + C * log10(fGHz / 5);
+            elseif d <= dbp
+                v = A * log10(d) + B + C * log10(fGHz / 5);
+            else
+                v = 40 * log10(d) + 9.45 - 17.3 * log10((htx - 1) * (hrx - 1)) + 2.7 * log10(fGHz / 5);
+            end
         end
 
-        function v = channelGain(loss, shadow, ray, gt, gr)
-            v = max(10^((gt + gr - loss) / 10) * 10^(-shadow / 10) * max(ray, 1e-12), 1e-30);
+        function v = channelGain(loss, shadow, ray, gt, gr, receiverNoiseFigureDb)
+            if nargin < 6, receiverNoiseFigureDb = 0; end
+            v = max(10^((gt + gr - receiverNoiseFigureDb - loss) / 10) * 10^(-shadow / 10) * max(ray, 1e-12), 1e-30);
         end
 
         function r = uplinkRate(B, share, p, h, noise)

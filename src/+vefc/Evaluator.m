@@ -205,8 +205,11 @@ classdef Evaluator
 
                 end
             end
-            score = vefc.FormulaLibrary.pythonSum(eff);
-            result = struct('score', score, 'totalEfficiency', score, 'avgEfficiency', mean(eff), 'avgDelay', mean(delay), 'avgEnergy', mean(energy), 'totalEnergy', vefc.FormulaLibrary.pythonSum(energy), 'completionRate', mean(complete), 'applicationDelay', delay, 'applicationEnergy', energy, 'applicationEfficiency', eff, 'completed', complete, 'solution', solution, 'assignment', state.assignment', 'taskStart', state.start, 'taskFinish', state.finish, 'taskEnergy', state.energy, 'cache', {state.cache}, 'schedule', schedule, 'applications', apps);
+            % Paper efficiency is ALWAYS computed first and never changed.
+            % The active fitness is selected centrally in FitnessLibrary.
+            fit = vefc.FitnessLibrary.evaluate(ctx, eff, delay, energy, state);
+            score = fit.score;
+            result = struct('score', score, 'optimizationScore', score, 'paperScore', fit.paperScore, 'totalEfficiency', fit.paperScore, 'avgEfficiency', mean(eff), 'avgDelay', mean(delay), 'avgEnergy', mean(energy), 'totalEnergy', vefc.FormulaLibrary.pythonSum(energy), 'completionRate', mean(complete), 'fitnessId', fit.id, 'fitnessLabel', fit.label, 'fitnessDescription', fit.description, 'loadJain', fit.loadJain, 'loadImbalance', fit.loadImbalance, 'mecBusyTime', fit.mecBusyTime, 'mecTaskCount', fit.mecTaskCount, 'mecProviderIds', fit.mecProviderIds, 'fitnessObjectiveValues', fit.objectiveValues, 'fitnessWeights', fit.weights, 'fitnessTerms', fit.terms, 'fitnessCost', fit.cost, 'applicationDelay', delay, 'applicationEnergy', energy, 'applicationEfficiency', eff, 'completed', complete, 'solution', solution, 'assignment', state.assignment', 'taskStart', state.start, 'taskFinish', state.finish, 'taskEnergy', state.energy, 'cache', {state.cache}, 'schedule', schedule, 'applications', apps);
         end
 
     end

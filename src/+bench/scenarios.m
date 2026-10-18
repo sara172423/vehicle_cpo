@@ -21,7 +21,7 @@ function list = scenarios(cfg, available)
                 values = diag;
             end
             for j = 1:numel(values)
-                scenarioRecord = make('mission_vehicle_count', values(j), values(j), 76, available, max(values), [], 50);
+                scenarioRecord = make('mission_vehicle_count', values(j), values(j), 76, 76, max(values), [], 50);
                 if isempty(list)
                     list = scenarioRecord;
                 else
@@ -40,13 +40,22 @@ function list = scenarios(cfg, available)
             end
         case 'figure_9'
             values = [75 80 85 90 95 100 105];
-            pool = min(available, max(optim.PythonRandom.roundEven(4 * 1000 ./ (2.5 * values / 3.6))));
             if ~isempty(sweep)
                 values = sweep;
             end
+            % The paper states that vehicles are dropped according to a spatial
+            % Poisson process and that the mean same-lane spacing is 2.5*v
+            % (v in m/s). The actual vehicle count is therefore sampled inside
+            % ContextBuilder for each repetition/seed instead of being fixed to
+            % the mean count here.
+            pool = available;
             for j = 1:numel(values)
-                n = min(pool, optim.PythonRandom.roundEven(4 * 1000 / (2.5 * values(j) / 3.6)));
-                scenarioRecord = make('speed_kmh', values(j), n, n, pool, n, values(j), 50);
+                expected = optim.PythonRandom.roundEven(4 * 1000 / (2.5 * values(j) / 3.6));
+                scenarioRecord = make('speed_kmh', values(j), expected, expected, pool, expected, values(j), 50);
+                scenarioRecord.spatialPoisson = true;
+                scenarioRecord.poissonAllMission = true;
+                scenarioRecord.roadLengthM = 1000;
+                scenarioRecord.poissonMeanSpacingM = 2.5 * values(j) / 3.6;
                 if isempty(list)
                     list = scenarioRecord;
                 else
@@ -79,5 +88,5 @@ function list = scenarios(cfg, available)
 end
 
 function s = make(param, val, A, R, pool, assign, speed, mec)
-    s = struct('sweepParameter', param, 'sweepValue', val, 'vehicleCount', A, 'roadVehicleCount', R, 'poolCount', pool, 'assignmentPoolCount', assign, 'speedKmh', speed, 'mecCapacityGHz', mec, 'extensionRoadCount', R);
+    s = struct('sweepParameter', param, 'sweepValue', val, 'vehicleCount', A, 'roadVehicleCount', R, 'poolCount', pool, 'assignmentPoolCount', assign, 'speedKmh', speed, 'mecCapacityGHz', mec, 'extensionRoadCount', R, 'spatialPoisson', false, 'poissonAllMission', false, 'roadLengthM', 1000, 'poissonMeanSpacingM', []);
 end

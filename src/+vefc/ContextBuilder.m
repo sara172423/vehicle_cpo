@@ -37,31 +37,69 @@ classdef ContextBuilder
             lanes = sort(unique(arrayfun(@(v)v.initial_snapshot.lane_x_coord, vs)));
             assert(numel(lanes) == 4 && all(diff(lanes) == 4));
             rngRoad = optim.PythonRandom(seed * 1000003 + 7919);
-            selected = rngRoad.shuffle(1:pool);
-            selected = selected(1:R);
-            roadIds = [baseVs(selected).id];
-            position = zeros(R, 2);
-            speeds = zeros(R, 1);
-            cursor = 1;
-            for l = 1:4
-                count = floor(R / 4) + (l <= mod(R, 4));
-                ys = zeros(1, count);
-                for j = 1:count
-                    ys(j) = rngRoad.uniform(0, 1000);
-                end
-                ys = sort(ys);
-                for y = ys
-                    position(cursor, :) = [lanes(l) y];
-                    if isempty(speed)
-                        speeds(cursor) = rngRoad.uniform(60, 80);
-                    else
-                        speeds(cursor) = speed;
+            spatialPoisson = get('spatialPoisson', false) && ~explicit;
+            if spatialPoisson
+                assert(~isempty(speed) && isscalar(speed) && speed > 0, 'Spatial Poisson road generation requires a positive fixed speed');
+                roadLength = get('roadLengthM', 1000);
+                meanSpacing = get('poissonMeanSpacingM', 2.5 * speed / 3.6);
+                assert(roadLength > 0 && meanSpacing > 0);
+                poissonRng = optim.PythonRandom(seed * 1000003 + 15485863);
+                % Exact homogeneous 1-D spatial Poisson process on each lane:
+                % inter-vehicle spacings are exponential with mean meanSpacing.
+                while true
+                    position = zeros(0, 2);
+                    for l = 1:4
+                        y = poissonRng.expovariate(1 / meanSpacing);
+                        while y < roadLength
+                            position(end + 1, :) = [lanes(l) y]; %#ok<AGROW>
+                            y = y + poissonRng.expovariate(1 / meanSpacing);
+                        end
                     end
-                    cursor = cursor + 1;
+                    R = size(position, 1);
+                    if R >= 2 && R <= pool
+                        break
+                    end
+                    % dataset.json has a finite pool of vehicle/provider records;
+                    % resample only if a Poisson realization falls outside it.
+                end
+                if get('poissonAllMission', false)
+                    A = R;
+                    assignPool = R;
+                else
+                    assert(R >= A, 'Poisson road realization has fewer road vehicles than mission vehicles');
+                end
+                selected = rngRoad.shuffle(1:pool);
+                selected = selected(1:R);
+                roadIds = [baseVs(selected).id];
+                speeds = repmat(speed, R, 1);
+            else
+                selected = rngRoad.shuffle(1:pool);
+                selected = selected(1:R);
+                roadIds = [baseVs(selected).id];
+                position = zeros(R, 2);
+                speeds = zeros(R, 1);
+                cursor = 1;
+                for l = 1:4
+                    count = floor(R / 4) + (l <= mod(R, 4));
+                    ys = zeros(1, count);
+                    for j = 1:count
+                        ys(j) = rngRoad.uniform(0, 1000);
+                    end
+                    ys = sort(ys);
+                    for y = ys
+                        position(cursor, :) = [lanes(l) y];
+                        if isempty(speed)
+                            speeds(cursor) = rngRoad.uniform(60, 80);
+                        else
+                            speeds(cursor) = speed;
+                        end
+                        cursor = cursor + 1;
+                    end
                 end
             end
             missionRoadIds = roadIds;
             if isfield(s, 'extensionRoadCount') && s.extensionRoadCount > R
+                assert(~spatialPoisson, 'extensionRoadCount is not used with spatial-Poisson Figure 9 generation');
                 target = s.extensionRoadCount;
                 assert(target <= numel(vs));
                 extraRng = optim.PythonRandom(seed * 1000003 + 32452843);
@@ -91,16 +129,40 @@ classdef ContextBuilder
                 missionRoadIds = roadIds;
                 assert(numel(unique(roadIds)) == R && all(ismember(roadIds, [vs.id])), 'Unknown or duplicate road vehicles');
             end
+            % Article-aligned RSU association: choose among covering RSUs by
+            % instantaneous V2I channel state (CSI), not merely by distance.
             access = zeros(R, 1);
+            accessGain = zeros(R, 1);
+            accessDistance = zeros(R, 1);
             for i = 1:R
-                distance = arrayfun(@(q)vefc.FormulaLibrary.distance3d(position(i, :), par.h_vehicle, [q.x_coord q.y_coord], par.h_rsu), rs);
-                [dist, j] = min(distance);
-                assert(dist <= par.cell_radius_rsu, 'Vehicle outside RSU cells');
+                distances = arrayfun(@(q)vefc.FormulaLibrary.distance3d(position(i, :), par.h_vehicle, [q.x_coord q.y_coord], par.h_rsu), rs);
+                candidates = find(distances <= par.cell_radius_rsu);
+                assert(~isempty(candidates), 'Vehicle outside RSU cells');
+                seeds = zeros(1, numel(candidates));
+                for q = 1:numel(candidates)
+                    rid = rs(candidates(q)).id;
+                    seeds(q) = mod(seed * 1000003 + roadIds(i) * 97409 + rid * 9973 + 104729, 2^32);
+                end
+                [shadow, ray] = optim.channelFading(seeds, repmat(par.sigma_v2i, 1, numel(candidates)));
+                gains = zeros(1, numel(candidates));
+                for q = 1:numel(candidates)
+                    loss = vefc.FormulaLibrary.v2iPathLoss(distances(candidates(q)));
+                    gains(q) = vefc.FormulaLibrary.channelGain(loss, shadow(q), ray(q), par.G_vehicle, par.G_rsu, par.rec_noi_rsu);
+                end
+                [accessGain(i), best] = max(gains);
+                j = candidates(best);
                 access(i) = rs(j).id;
+                accessDistance(i) = distances(j);
             end
             if explicit && isfield(s.roadState, 'rsu_id')
                 access = [s.roadState.rsu_id]';
                 assert(all(ismember(access, [rs.id])), 'Unknown access RSU');
+                for i = 1:R
+                    j = find([rs.id] == access(i), 1);
+                    accessDistance(i) = vefc.FormulaLibrary.distance3d(position(i, :), par.h_vehicle, [rs(j).x_coord rs(j).y_coord], par.h_rsu);
+                    accessGain(i) = NaN; % external snapshot supplied the association; CSI used by that external decision is unknown here.
+                    assert(accessDistance(i) <= par.cell_radius_rsu, 'Explicit RSU assignment is outside cell radius');
+                end
             end
             sp = d.service_providers;
             mask = strcmp({sp.type}, 'rsu');
@@ -150,7 +212,7 @@ classdef ContextBuilder
             dagIds = [at.id];
             assert(numel(dagIds) == 8);
             deadlines = [];
-            dw = [5 10 15 20 20 15 10 5];
+            dw = cfg.deadlineSamplingWeights;
             for j = 1:8
                 deadlines = [deadlines repmat(20 + 10 * j, 1, dw(j))];
             end
@@ -176,7 +238,7 @@ classdef ContextBuilder
                 assert(numel(unique(missionOrder)) == A && all(ismember(missionOrder, roadIds)), 'Mission IDs must be unique and present on road');
                 assert(numel(unique([rows.application_id])) == A && all(ismember(pairs(:, 2), [at.id])), 'Invalid application IDs or DAG');
             end
-            ctx = struct('seed', seed, 'params', par, 'applicationCount', A, 'providerCount', P, 'providerId', id, 'isRsu', isRsu, 'providerType', {{sp.type}}, 'providerPosition', pos, 'providerCpu', cpu, 'providerCache', cap, 'providerVehicleId', vehicle, 'providerRsuId', rsu, 'roadVehicleIds', roadIds, 'roadPosition', position, 'roadSpeeds', speeds, 'roadAccessRsuId', access, 'missionVehicleId', missionOrder(1:A)', 'applicationId', -(1:A)', 'applicationTypeId', pairs(1:A, 2), 'deadline', pairs(1:A, 1) / 1000, 'useCaching', true, 'mecCapacityGHz', mec);
+            ctx = struct('seed', seed, 'params', par, 'applicationCount', A, 'providerCount', P, 'providerId', id, 'isRsu', isRsu, 'providerType', {{sp.type}}, 'providerPosition', pos, 'providerCpu', cpu, 'providerCache', cap, 'providerVehicleId', vehicle, 'providerRsuId', rsu, 'roadVehicleIds', roadIds, 'roadPosition', position, 'roadSpeeds', speeds, 'roadAccessRsuId', access, 'roadAccessChannelGain', accessGain, 'roadAccessDistance', accessDistance, 'missionVehicleId', missionOrder(1:A)', 'applicationId', -(1:A)', 'applicationTypeId', pairs(1:A, 2), 'deadline', pairs(1:A, 1) / 1000, 'useCaching', true, 'mecCapacityGHz', mec);
             if explicit
                 ctx.applicationId = [rows.application_id]';
             end
@@ -342,7 +404,7 @@ classdef ContextBuilder
                     end
                 end
             end
-            ctx.sourceBits = max(1, optim.PythonRandom.roundEven(ctx.serviceBits * 0.1));
+            ctx.sourceBits = max(1, optim.PythonRandom.roundEven(ctx.serviceBits * cfg.sourceProgramFraction));
             ctx.localTime = zeros(A, 1);
             ctx.localEnergy = zeros(A, 1);
             ctx.referenceTime = zeros(A, 1);
@@ -419,9 +481,13 @@ classdef ContextBuilder
                     if isRsu(p) || isRsu(q)
                         loss = vefc.FormulaLibrary.v2iPathLoss(distance);
                     else
-                        loss = vefc.FormulaLibrary.v2vPathLoss(distance);
+                        loss = vefc.FormulaLibrary.v2vPathLoss(distance, h1, h2, 2.0);
                     end
-                    gain = vefc.FormulaLibrary.channelGain(loss, shadow(j), ray(j), g1, g2);
+                    receiverNoiseFigureDb = par.rec_noi_vehicle;
+                    if isRsu(q)
+                        receiverNoiseFigureDb = par.rec_noi_rsu;
+                    end
+                    gain = vefc.FormulaLibrary.channelGain(loss, shadow(j), ray(j), g1, g2, receiverNoiseFigureDb);
                     mx = vefc.FormulaLibrary.dbmToWatt(par.pmax_vehicle);
                     if isRsu(p)
                         mx = vefc.FormulaLibrary.dbmToWatt(par.pmax_rsu);

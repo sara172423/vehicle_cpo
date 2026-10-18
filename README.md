@@ -1,366 +1,215 @@
+# VEFC MATLAB Benchmark — Clean Research Version
 
-# Vehicle CPO — Vehicular Edge–Fog Computing Optimization in MATLAB
+This repository contains the MATLAB implementation used for VEFC task scheduling/cache experiments based on:
 
-A research-oriented MATLAB implementation for task scheduling and cache-aware optimization in Vehicular Edge–Fog Computing (VEFC).
+**Cuckoo Search-Enabled Task Scheduling and Cache Updating in Vehicular Edge-Fog Computing**  
+DOI: `10.1109/TVT.2025.3540639`
 
-This repository contains a MATLAB port and cleaned research codebase derived from the project implementation of:
+The project keeps the paper objective immutable and isolates the proposed load-aware objective so algorithms and fitness definitions can be tested independently.
 
-> **Cuckoo Search-Enabled Task Scheduling and Cache Updating in Vehicular Edge-Fog Computing**  
-> IEEE Transactions on Vehicular Technology, 2025  
-> DOI: `10.1109/TVT.2025.3540639`
+## Supported optimizers
 
-The repository includes the paper-aligned DCSGA/Cuckoo baseline, a discrete CPO-based optimizer and several additional comparison optimizers under a shared benchmark/evaluation framework.
+Only the optimizer families currently used in this project are enabled:
 
----
-
-## Project goals
-
-The project is designed to:
-
-- reproduce and study the vehicular edge–fog scheduling model;
-- evaluate task scheduling and cache-aware assignment strategies;
-- compare CPO-based variants against the DCSGA/Cuckoo baseline;
-- support fair optimizer comparisons using a common objective/evaluator and a shared NFE budget;
-- reproduce benchmark scenarios corresponding to Figures 6–10 of the base study;
-- export convergence, statistical and application-level results for analysis.
-
-The MATLAB package focuses on the scientific/optimization layer. The former application/API worker layer is intentionally outside the scope of this MATLAB version.
-
----
-
-## Implemented algorithms
-
-The benchmark runner currently recognizes the following algorithm names:
-
-| Algorithm name | Description |
+| MATLAB ID | Meaning |
 |---|---|
-| `dcsga` / `cuckoo` | Paper-aligned Cuckoo Search / DCSGA baseline |
-| `cpo` | Full discrete CPO-based optimizer |
-| `dcpo_base` | Base CPO variant |
-| `dcpo_criticality` | CPO variant using task criticality guidance |
-| `dcpo_cache` | CPO variant using cache-related guidance |
-| `gpc` | Discrete GPC comparison optimizer |
-| `gwo` / `gwo_aco` | Discrete GWO comparison optimizer |
-| `puma` | Discrete Puma comparison optimizer |
-| `dtosc` | DTOSC baseline |
-| `to_v2i` | DCSGA ablation / V2I-only mode |
-| `to_wo_c` | DCSGA without caching |
-| `to_wo_r` | DCSGA without task ranking |
+| `dcsga` (alias: `cuckoo`) | Paper-aligned discrete Cuckoo / DCSGA baseline |
+| `cpo` | Full proposed CPO variant |
+| `dcpo_base` | Base CPO ablation |
+| `dcpo_criticality` | CPO + criticality guidance |
+| `dcpo_cache` | CPO + cache guidance |
+| `gwo` | Discrete Grey Wolf Optimizer |
+| `gpc` | Discrete Giza Pyramids Construction optimizer |
+| `puma` | Discrete Puma Optimizer |
 
-> The CPO/GPC/GWO/Puma implementations in this repository are discrete, project-adapted variants. They should not be interpreted as unmodified continuous versions of the original algorithms.
+PSO, DTOSC and the old TO-* branches are not part of this clean version.
 
----
+## Active fitness functions
+
+Only two active fitness definitions are retained:
+
+### 1. `fitness_1` — Paper Baseline
+
+Exact article total offloading-efficiency objective. This is the immutable baseline and must not be modified.
+
+### 2. `fitness_load_aware` — Load-Aware Weighted-Sum
+
+The previously screened `fitness_4` has been renamed to a scientific descriptive ID:
+
+```text
+fitness_load_aware
+```
+
+Formula:
+
+```text
+Score = (1-lambda)*PaperQ + lambda*N*Jain(MEC busy time)
+```
+
+Default:
+
+```matlab
+cfg.loadAwareWeight = 0.05;
+```
+
+The old experimental `fitness_2`, `fitness_3` and `fitness_5` IDs have been removed.
+
+**Important:** do not compare raw `optimization_score` magnitudes across different fitness definitions. For cross-fitness analysis compare PaperQ, delay, energy, MEC load imbalance/Jain, completion rate and task-mode counts.
+
+## Temporary/new fitness location
+
+A clearly marked section named:
+
+```text
+TEMPORARY EXPERIMENTAL FITNESS SLOT
+```
+
+exists in:
+
+```text
+src/+vefc/FitnessLibrary.m
+```
+
+To test a new temporary fitness:
+
+1. add any new parameter to `config/defaultConfig.m`;
+2. add the temporary ID to `allowedFitnesses` in `src/+bench/validateConfig.m`;
+3. add one new `case` under the marked slot in `src/+vefc/FitnessLibrary.m`;
+4. do **not** change optimizer files and do **not** modify `fitness_1`.
 
 ## Repository structure
 
 ```text
-vehicle_cpo/
-├── config/
-│   └── defaultConfig.m          # Main experiment configuration
-├── data/
-│   └── dataset.json             # VEFC dataset used by the MATLAB model
-├── results/                     # Experiment outputs and generated figures
-├── src/
-│   ├── +bench/                  # Benchmark runner, statistics and plots
-│   ├── +dataio/                 # Dataset loading/state handling
-│   ├── +monarch/                # Ported numerical/model utilities
-│   ├── +optim/                  # Optimization algorithms
-│   └── +vefc/                   # VEFC model, evaluator, formulas and cache logic
-├── tools/
-│   └── convert_pg_dump.py       # Optional PostgreSQL dump converter
-├── run_experiment.m             # Main experiment entry point
-├── run_snapshot.m               # Fixed snapshot / assignment evaluation
-├── startup.m                    # Adds project folders to the MATLAB path
-├── README.md
-└── .gitignore
+config/defaultConfig.m        Main configuration
+data/dataset.json             VEFC simulation dataset
+src/+bench/                   Runner, validation, statistics, plots, export
+src/+optim/                   Cuckoo, CPO, GPC, GWO, Puma
+src/+vefc/                    Context, evaluator, formulas, fitness library
+src/+monarch/Model.m          Ported numerical model utilities
+run_experiment.m              Main experiment entry point
+run_snapshot.m                Frozen-snapshot/fixed-assignment evaluation
+startup.m                     Adds project folders to MATLAB path
+EXPERIMENT_COMMANDS.md        Clean commands for Figures 6–10
 ```
-
-MATLAB folders beginning with `+` are package namespaces. For example:
-
-```text
-src/+optim/cpo.m  ->  optim.cpo
-```
-
----
-
-## Requirements
-
-### Required
-
-- MATLAB
-- The complete repository, including `data/dataset.json`
-
-### Optional
-
-- Python, only if you need to regenerate `dataset.json` from a PostgreSQL dump using `tools/convert_pg_dump.py`
-
-No Python environment is required for normal MATLAB experiment execution.
-
----
 
 ## Quick start
 
-Clone the repository:
-
-```bash
-git clone https://github.com/sara172423/vehicle_cpo.git
-cd vehicle_cpo
-```
-
-Open MATLAB and set the repository root — the directory containing `startup.m` — as the **Current Folder**.
-
-Then run:
-
 ```matlab
 startup
 cfg = defaultConfig();
 results = run_experiment(cfg);
 ```
 
-The default configuration is defined in:
+With the untouched default configuration this runs the DCSGA/Cuckoo baseline using `fitness_1`.
 
-```text
-config/defaultConfig.m
-```
+## Fair optimizer comparison
 
----
-
-## Small smoke test
-
-For a very small startup test:
+Use a common NFE budget:
 
 ```matlab
-startup
 cfg = defaultConfig();
 cfg.figure = 'figure_6';
-cfg.repetitions = 1;
-cfg.populationSize = 2;
-cfg.tmax = 1;
-cfg.diagnosticVehicleCount = 3;
-cfg.diagnosticRoadVehicleCount = 8;
-cfg.summaryOnly = true;
-cfg.outputDir = fullfile(pwd, 'results', 'smoke_test');
-results = run_experiment(cfg);
-```
-
-This is only a functional smoke test. It is **not** suitable for scientific comparison or convergence claims.
-
----
-
-## Example: fair CPO vs DCSGA comparison
-
-```matlab
-startup
-cfg = defaultConfig();
-
-cfg.figure = 'figure_6';
-cfg.algorithms = {'dcsga', 'cpo'};
 cfg.experimentMode = 'fair_optimizer_comparison';
-
-cfg.seedStart = 2001;
-cfg.repetitions = 3;
-cfg.populationSize = 20;
+cfg.algorithms = {'dcsga','cpo','gpc','gwo','puma'};
+cfg.fitnesses = {'fitness_1'};
+cfg.repetitions = 5;
+cfg.seedStart = 10001;
+cfg.populationSize = 50;
 cfg.tmax = 200;
-cfg.maxFunctionEvaluations = 300;
-
-cfg.diagnosticVehicleCount = 20;
-cfg.diagnosticRoadVehicleCount = 20;
-
-cfg.outputDir = fullfile(pwd, 'results', 'cpo_vs_dcsga');
+cfg.maxFunctionEvaluations = 1000;
+cfg.outputDir = fullfile(pwd,'results','figure_6_base');
 results = run_experiment(cfg);
 ```
 
-In `fair_optimizer_comparison` mode, a common function-evaluation budget (`maxFunctionEvaluations`) is required.
+## Fitness selection
 
----
+Baseline only:
+
+```matlab
+cfg.fitnesses = {'fitness_1'};
+```
+
+Load-aware only:
+
+```matlab
+cfg.fitnesses = {'fitness_load_aware'};
+cfg.loadAwareWeight = 0.05;
+```
+
+Paired baseline-vs-load-aware comparison on the same frozen seed/scenario:
+
+```matlab
+cfg.fitnesses = {'fitness_1','fitness_load_aware'};
+cfg.loadAwareWeight = 0.05;
+```
+
+The runner builds each scenario once per seed and reuses that frozen context for every selected fitness and algorithm.
 
 ## Experiment modes
 
-The project supports two experiment modes:
-
 ### `paper_reproduction`
 
-Used for paper-aligned reproduction runs. Only the algorithms associated with the selected source figure are accepted, and the run is controlled by `tmax` rather than a shared NFE cap.
+- algorithm: DCSGA/Cuckoo only;
+- fitness: `fitness_1` only;
+- controlled by `tmax`;
+- no common NFE cap.
 
 ### `fair_optimizer_comparison`
 
-Used when comparing added optimizers. A common:
-
-```matlab
-cfg.maxFunctionEvaluations
-```
-
-must be specified so algorithms are evaluated under a shared objective-evaluation budget.
-
----
-
-## Main configuration fields
-
-The most frequently used fields are:
-
-| Field | Purpose |
-|---|---|
-| `figure` | Selects benchmark scenario: `figure_6` … `figure_10` |
-| `algorithms` | Algorithms to compare |
-| `experimentMode` | `paper_reproduction` or `fair_optimizer_comparison` |
-| `repetitions` | Number of repeated runs |
-| `seedStart` | First random seed |
-| `populationSize` | Optimizer population size |
-| `tmax` | Search-loop limit |
-| `maxFunctionEvaluations` | Shared NFE cap for fair comparisons |
-| `diagnosticVehicleCount` | Optional reduced Mission count |
-| `diagnosticRoadVehicleCount` | Optional reduced road-vehicle count |
-| `diagnosticSweepValues` | Optional subset for Figure 9/10 sweeps |
-| `exportArtifacts` | Enables result/figure export |
-| `summaryOnly` | Skips detailed output artifacts |
-| `outputDir` | Result output directory |
-| `dataDir` | Path to `dataset.json` |
-
-Always begin a new experiment from a fresh configuration:
-
-```matlab
-cfg = defaultConfig();
-```
-
----
+- any supported optimizer(s);
+- either active fitness or both;
+- requires `cfg.maxFunctionEvaluations`;
+- all optimizer/fitness runs consume the same NFE budget.
 
 ## Benchmark scenarios
 
 | Figure | Scenario |
 |---|---|
-| Figure 6 | Convergence / population behavior and best-so-far vs NFE |
-| Figure 7 | Mission vehicle count sweep: 52, 56, …, 76 |
-| Figure 8 | Deadline-based analysis using 68 missions |
+| Figure 6 | Convergence / best-so-far vs NFE |
+| Figure 7 | Mission-count sweep: 52, 56, 60, 64, 68, 72, 76 |
+| Figure 8 | Deadline-group analysis with 68 missions |
 | Figure 9 | Vehicle-speed sweep: 75–105 km/h |
-| Figure 10 | MEC-capacity sweep: 30–80 GHz |
+| Figure 10 | MEC capacity sweep: 30–80 GHz |
 
-Figure 8 uses a larger default repetition count than the other individual figure runs. For quick checks, explicitly set:
+Figure 7 now uses the strict 76-record paper-aligned vehicle/provider pool instead of mixing the 20 extension records into the road sample.
 
-```matlab
-cfg.repetitions = 1;
-```
+Figure 9 retains the stochastic per-lane spatial Poisson road process; the finite 96-record provider pool is used because a realization can exceed 76 vehicles.
 
----
+## Reconstruction assumptions
 
-## Important source files
-
-| File | Responsibility |
-|---|---|
-| `src/+optim/cpo.m` | CPO search logic and CPO variants |
-| `src/+optim/cuckoo.m` | DCSGA / Cuckoo baseline |
-| `src/+optim/gpc.m` | GPC optimizer |
-| `src/+optim/gwo.m` | GWO optimizer |
-| `src/+optim/puma.m` | Puma optimizer |
-| `src/+optim/dtosc.m` | DTOSC implementation |
-| `src/+optim/EvaluationBudget.m` | Function-evaluation budget tracking |
-| `src/+optim/OptimizerCommon.m` | Shared optimizer utilities / initialization |
-| `src/+vefc/Evaluator.m` | Fitness, delay, energy and task execution evaluation |
-| `src/+vefc/FormulaLibrary.m` | Model formulas and numerical compatibility helpers |
-| `src/+vefc/ContextBuilder.m` | Builds optimization context and provider domains |
-| `src/+vefc/CacheManager.m` | Cache handling |
-| `src/+bench/runAlgorithm.m` | Selects optimizer/variant |
-| `src/+bench/scenarios.m` | Figure-specific benchmark scenarios |
-| `src/+bench/run.m` | Benchmark execution |
-| `src/+bench/plots.m` | Plot generation |
-
----
-
-## Results
-
-Depending on configuration, an experiment can export artifacts such as:
-
-- raw experiment results;
-- summary results;
-- convergence histories;
-- application-level metrics;
-- NFE summaries;
-- pairwise statistical results;
-- metadata and execution audit information;
-- PNG/PDF benchmark figures.
-
-Set a dedicated output directory for every important experiment to avoid overwriting previous results:
+The benchmark remains a reconstructed simulation benchmark, not a real traffic trace. Two unpublished reconstruction parameters remain explicit/configurable:
 
 ```matlab
-cfg.outputDir = fullfile(pwd, 'results', 'my_experiment_name');
+cfg.deadlineSamplingWeights = [5 10 15 20 20 15 10 5];
+cfg.sourceProgramFraction = 0.10;
 ```
 
----
+These assumptions are written to `metadata.json` for every exported experiment.
 
-## Dataset
+## Exported artifacts
 
-The default MATLAB input is:
+With:
 
-```text
-data/dataset.json
+```matlab
+cfg.exportArtifacts = true;
+cfg.summaryOnly = false;
 ```
 
-The current project data contains the VEFC entities and parameters required by the benchmark model, including vehicles, RSUs, application/task data, dependencies, services and resource parameters.
+the main output is intentionally compact:
 
-If a new PostgreSQL dump must be converted, the optional converter can be used from a system terminal:
+- `summary_results.csv`
+- `raw_results.csv`
+- `metadata.json`
+- `fitness_comparison_results.csv` only when more than one fitness is selected
+- figure PNG/PDF files; Figure 6 also exports NFE plots
 
-```bash
-python tools/convert_pg_dump.py new_dump.sql data/raw
-```
+The full MATLAB `results` structure is returned in memory. Save it manually only when you actually need a `.mat` archive.
 
-This may regenerate/overwrite dataset artifacts. Back up the existing data before conversion.
+## Scientific comparison notes
 
----
-
-## Reproducibility notes
-
-For meaningful algorithm comparisons:
-
-1. use the same scenario and dataset;
-2. use controlled seeds;
-3. keep the objective/evaluator identical;
-4. use a common NFE budget for fair optimizer comparisons;
-5. report population size, `tmax`, NFE budget and repetitions;
-6. use multiple seeds for statistical conclusions;
-7. keep generated outputs in separate experiment directories.
-
-The code includes numerical compatibility work intended to preserve important behavior from the reference Python implementation, but final scientific claims should still be based on verified MATLAB runs on the target MATLAB installation.
-
----
-
-## Scientific scope and limitations
-
-This repository preserves several modeling assumptions from the source implementation/research reconstruction. In particular:
-
-- the workload/DAG data are a research reconstruction rather than an official public dataset from the paper;
-- the MATLAB benchmark solves a static experiment snapshot rather than the complete dynamic web/API worker system;
-- implementation parity with a reference codebase does not by itself prove the scientific superiority or novelty of any optimizer;
-- fair comparison requires more than using a common objective function — budgets, seeds, parameter settings and repetition counts must also be reported.
-
----
-
-## Git workflow
-
-A typical contribution workflow is:
-
-```bash
-git switch -c feature/my-change
-# edit files
-git add .
-git commit -m "Describe the change"
-git push -u origin feature/my-change
-```
-
-Then open a Pull Request on GitHub and merge only after reviewing the changes and experiment impact.
-
-Avoid committing secrets, local environments, raw database dumps or temporary MATLAB/Python artifacts. The included `.gitignore` covers the common cases for this repository.
-
----
-
-## Reference
-
-Base paper:
-
-**Cuckoo Search-Enabled Task Scheduling and Cache Updating in Vehicular Edge-Fog Computing**  
-DOI: `10.1109/TVT.2025.3540639`
-
----
-
-## Repository
-
-GitHub: `https://github.com/sara172423/vehicle_cpo`
-
+- Use the same seed/scenario for paired algorithm and fitness comparisons.
+- Use a common NFE budget in fair optimizer comparisons.
+- Keep `fitness_1` immutable.
+- For final claims use independent held-out seeds and report mean/dispersion, paired tests and effect sizes.
+- MEC load balance is **MEC-server load balance**, not whole-system/user fairness.
+- A no-MEC-use solution has mathematically equal zero MEC loads; always inspect `mec_task_count_total` alongside Jain/load imbalance so zero utilization is not misinterpreted as useful balance.

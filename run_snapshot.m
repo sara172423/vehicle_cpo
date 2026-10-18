@@ -30,6 +30,13 @@ function result = run_snapshot(snapshot, algorithm, cfg, providerIds)
     end
     d = dataio.loadDataset(cfg.dataDir);
     ctx = vefc.ContextBuilder.build(d, cfg, snapshot);
+    % Snapshot mode evaluates the first selected fitness.
+    selectedFitnesses = cfg.fitnesses;
+    if ischar(selectedFitnesses) || isstring(selectedFitnesses)
+        selectedFitnesses = cellstr(selectedFitnesses);
+    end
+    ctx.fitnessId = lower(char(selectedFitnesses{1}));
+    ctx.loadAwareWeight = cfg.loadAwareWeight;
     if nargin >= 4
         providerIds = providerIds(:)';
         assert(numel(providerIds) == ctx.dimension, 'One provider per ranked non-entry task is required');

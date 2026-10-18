@@ -1,9 +1,9 @@
 function validateData(d)
-    expected = struct('B', 20, 'delta2', -114, 'Y_v2i', 3.76, 'Y_v2v', 1.8, 'sigma_v2i', 8, 'sigma_v2v', 3, 'h_rsu', 5, 'h_vehicle', 1.5, 'G_rsu', 8, 'G_vehicle', 3, 'levy_lambda', 1.5, 'p_discard_init', .2, 'S', 50, 'k', 1e-25, 'cell_radius_rsu', 250, 'rec_noi_rsu', 5, 'rec_noi_vehicle', 9, 'pmax_vehicle', 23, 'pmax_rsu', 30, 'fmax_vehicle', 3, 'fmax_rsu', 50, 'vehicle_speed_min_kmh', 60, 'vehicle_speed_max_kmh', 80, 'application_rate_per_second', 10);
+    expected = struct('B', 20, 'delta2', -114, 'sigma_v2i', 8, 'sigma_v2v', 3, 'h_vehicle', 1.5, 'G_rsu', 8, 'G_vehicle', 3, 'levy_lambda', 1.5, 'p_discard_init', .2, 'S', 50, 'k', 1e-25, 'cell_radius_rsu', 250, 'rec_noi_rsu', 5, 'rec_noi_vehicle', 9, 'pmax_vehicle', 23, 'pmax_rsu', 30, 'fmax_vehicle', 3, 'fmax_rsu', 50, 'vehicle_speed_min_kmh', 60, 'vehicle_speed_max_kmh', 80, 'application_rate_per_second', 10);
     keys = fieldnames(expected);
     for j = 1:numel(keys)
         k = keys{j};
-        assert(isfield(d.params, k) && abs(d.params.(k) - expected.(k)) <= max(1e-30, abs(expected.(k)) * 1e-9), 'Table III parameter mismatch: %s', k);
+        assert(isfield(d.params, k) && abs(d.params.(k) - expected.(k)) <= max(1e-30, abs(expected.(k)) * 1e-9), 'Published Table III parameter mismatch: %s', k);
     end
     assert(numel(d.vehicles) >= 76 && numel(d.rsus) >= 5);
     assert(all([d.vehicles.cpu_capacity] == 3e9) && all([d.vehicles.cache_capacity] == 625e6));
