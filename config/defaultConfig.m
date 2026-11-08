@@ -4,7 +4,7 @@ function cfg = defaultConfig()
     root = fileparts(fileparts(mfilename('fullpath')));
 
     cfg = struct( ...
-        'figure', 'figure_6', ...                  % figure_6 ... figure_10
+        'figure', 'figure_6', ...                  % article figures 6-10; new load-balance figure_11
         'algorithms', {{}}, ...                   % Empty = DCSGA/Cuckoo baseline
         'experimentMode', '', ...                 % Auto, paper_reproduction, fair_optimizer_comparison
         'repetitions', [], ...                    % Empty = figure-specific default

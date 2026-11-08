@@ -195,5 +195,11 @@ end
 
 function h = record(i, b, score, populationScores, population)
     h = optim.OptimizerCommon.historyRow(i, b, score, populationScores);
-    h.diagnostics = struct('population_diversity_mean', optim.OptimizerCommon.diversity(population, false));
+    algorithmDiagnostics = struct('population_diversity_mean', optim.OptimizerCommon.diversity(population, false));
+    % Preserve budget NFE diagnostics alongside original optimizer diagnostics.
+    extraNames = fieldnames(algorithmDiagnostics);
+    for diagnosticIndex = 1:numel(extraNames)
+        keyName = extraNames{diagnosticIndex};
+        h.diagnostics.(keyName) = algorithmDiagnostics.(keyName);
+    end
 end

@@ -4,8 +4,7 @@ function [x, ev, h, ctx] = runAlgorithm(name, ctx, cfg)
         case {'cuckoo', 'dcsga'}
             [x, ev, h] = optim.cuckoo(ctx, cfg);
 
-        case {'cpo', 'dcpo_base', 'dcpo_criticality', 'dcpo_cache'}
-            cfg.variant = name;
+        case 'cpo'
             [x, ev, h] = optim.cpo(ctx, cfg);
 
         case 'gpc'

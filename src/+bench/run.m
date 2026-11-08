@@ -51,10 +51,21 @@ function results = run(data, cfg)
                     if isempty(nfe)
                         nfe = 0;
                     end
+                    diagNfe = h(end).diagnostics;
+                    assert(nfe == diagNfe.fullFitnessEvaluations, ...
+                        'Reported NFE differs from actually computed full fitness evaluations');
+                    assert(nfe == diagNfe.seedFullEvaluations + diagNfe.searchFullEvaluations, ...
+                        'NFE initialization/search split is inconsistent');
                     cap = cfg.maxFunctionEvaluations;
                     exhausted = ~isempty(cap) && nfe >= cap;
 
                     row = struct('figure', cfg.figure, 'scenario_id', scenarioId, 'seed', scenario.seed, 'sweep_parameter', scenario.sweepParameter, 'sweep_value', scenario.sweepValue, 'mission_vehicle_count', ctx.applicationCount, 'road_vehicle_count', numel(ctx.roadVehicleIds), 'mean_vehicle_speed_kmh', mean(ctx.roadSpeeds), 'mean_mec_capacity_ghz', ctx.mecCapacityGHz, 'fitness_id', fitnessId, 'fitness_label', fitnessLabel, 'algorithm', name, 'optimization_score', ev.score, 'paper_total_efficiency', ev.paperScore, 'avg_delay', ev.avgDelay, 'avg_efficiency', ev.avgEfficiency, 'total_efficiency', ev.paperScore, 'total_energy_j', ev.totalEnergy, 'completion_rate', ev.completionRate, 'load_imbalance', ev.loadImbalance, 'load_jain', ev.loadJain, 'mec_busy_time_total_s', vefc.FormulaLibrary.pythonSum(ev.mecBusyTime), 'mec_task_count_total', vefc.FormulaLibrary.pythonSum(ev.mecTaskCount), 'function_evaluations', nfe, 'max_function_evaluations', cap, 'evaluation_budget_exhausted', exhausted, 'runtime_seconds', runtime, 'executed_iterations', numel(h) - 1);
+                    row.seed_full_evaluations = diagNfe.seedFullEvaluations;
+                    row.search_full_evaluations = diagNfe.searchFullEvaluations;
+                    row.cached_lookup_count = diagNfe.cachedLookupCount;
+                    row.duplicate_seed_computations = diagNfe.duplicateSeedComputations;
+                    row.greedy_partial_candidate_scores = diagNfe.greedyPartialCandidateScores;
+                    row.distinct_stored_solutions = diagNfe.distinctStoredSolutions;
                     if strcmp(cfg.figure, 'figure_9')
                         row.speed_kmh = scenario.speedKmh;
                     elseif strcmp(cfg.figure, 'figure_10')
@@ -64,6 +75,12 @@ function results = run(data, cfg)
                     modes = {ev.schedule.provider_mode};
                     energy = vefc.FormulaLibrary.pythonSum(ev.applicationEnergy);
                     ar = struct('figure', cfg.figure, 'scenario_id', scenarioId, 'seed', scenario.seed, 'fitness_id', fitnessId, 'fitness_label', fitnessLabel, 'algorithm', name, 'application_count', ctx.applicationCount, 'completed_application_count', sum(ev.completed), 'total_energy_j', energy, 'avg_delay_s', ev.avgDelay, 'avg_efficiency', ev.avgEfficiency, 'paper_total_efficiency', ev.paperScore, 'optimization_score', ev.score, 'total_efficiency', ev.paperScore, 'completion_rate', ev.completionRate, 'load_imbalance', ev.loadImbalance, 'load_jain', ev.loadJain, 'mec_busy_time_total_s', vefc.FormulaLibrary.pythonSum(ev.mecBusyTime), 'mec_task_count_total', vefc.FormulaLibrary.pythonSum(ev.mecTaskCount), 'fitness_objective_1', ev.fitnessObjectiveValues(1), 'fitness_objective_2', ev.fitnessObjectiveValues(2), 'fitness_objective_3', ev.fitnessObjectiveValues(3), 'fitness_weight_1', ev.fitnessWeights(1), 'fitness_weight_2', ev.fitnessWeights(2), 'fitness_weight_3', ev.fitnessWeights(3), 'fitness_term_1', ev.fitnessTerms(1), 'fitness_term_2', ev.fitnessTerms(2), 'fitness_term_3', ev.fitnessTerms(3), 'fitness_cost', ev.fitnessCost, 'runtime_seconds', runtime, 'executed_iterations', numel(h) - 1, 'function_evaluations', nfe, 'max_function_evaluations', cap, 'evaluation_budget_exhausted', exhausted, 'scheduled_task_count', numel(ev.schedule), 'local_task_count', sum(strcmp(modes, 'local')), 'v2v_task_count', sum(strcmp(modes, 'v2v')), 'v2i_task_count', sum(strcmp(modes, 'v2i')), 'transfer_count', sum(arrayfun(@(v)numel(v.transfers), ev.schedule)), 'cache_update_count', sum([ev.schedule.cache_update_required]), 'cache_hit_count', sum([ev.schedule.cache_hit]), 'cache_miss_count', sum([ev.schedule.cache_miss]), 'cache_insertion_count', sum([ev.schedule.cache_inserted_count]), 'cache_eviction_count', sum([ev.schedule.cache_evicted_count]));
+                    ar.seed_full_evaluations = diagNfe.seedFullEvaluations;
+                    ar.search_full_evaluations = diagNfe.searchFullEvaluations;
+                    ar.cached_lookup_count = diagNfe.cachedLookupCount;
+                    ar.duplicate_seed_computations = diagNfe.duplicateSeedComputations;
+                    ar.greedy_partial_candidate_scores = diagNfe.greedyPartialCandidateScores;
+                    ar.distinct_stored_solutions = diagNfe.distinctStoredSolutions;
                     if isempty(audit)
                         audit = ar;
                     else
@@ -139,8 +156,10 @@ function results = run(data, cfg)
                         end
                     end
 
-                    fprintf('%s %s seed=%d %s Score=%.12g PaperQ=%.12g Load=%.6g CR=%.4f NFE=%d\n', ...
-                        cfg.figure, fitnessId, scenario.seed, name, ev.score, ev.paperScore, ev.loadImbalance, ev.completionRate, nfe);
+                    fprintf('%s %s seed=%d %s Score=%.12g PaperQ=%.12g Load=%.6g CR=%.4f NFE=%d (init=%d search=%d; greedyCandidates=%d; cacheHits=%d)\n', ...
+                        cfg.figure, fitnessId, scenario.seed, name, ev.score, ev.paperScore, ev.loadImbalance, ev.completionRate, nfe, ...
+                        diagNfe.seedFullEvaluations, diagNfe.searchFullEvaluations, ...
+                        diagNfe.greedyPartialCandidateScores, diagNfe.cachedLookupCount);
                 end
             end
         end
@@ -154,8 +173,8 @@ function results = run(data, cfg)
     switch cfg.figure
         case 'figure_6'
             summary = bench.summarize(raw, {'figure', 'fitness_id', 'fitness_label', 'algorithm', 'iteration', 'point_type'}, {'optimization_score'});
-        case 'figure_7'
-            summary = bench.summarize(raw, {'figure', 'fitness_id', 'fitness_label', 'mission_vehicle_count', 'algorithm'}, {'optimization_score', 'paper_total_efficiency', 'avg_delay', 'avg_efficiency', 'total_efficiency', 'total_energy_j', 'completion_rate', 'load_imbalance', 'load_jain'});
+        case {'figure_7', 'figure_11'}
+            summary = bench.summarize(raw, {'figure', 'fitness_id', 'fitness_label', 'mission_vehicle_count', 'algorithm'}, {'optimization_score', 'paper_total_efficiency', 'avg_delay', 'avg_efficiency', 'total_efficiency', 'total_energy_j', 'completion_rate', 'load_imbalance', 'load_jain', 'mec_busy_time_total_s', 'mec_task_count_total'});
         case 'figure_8'
             summary = bench.summarize(raw, {'figure', 'fitness_id', 'fitness_label', 'deadline_s', 'deadline_ms', 'algorithm'}, {'avg_delay', 'completion_rate', 'optimization_score', 'paper_total_efficiency', 'load_imbalance'});
         case 'figure_9'

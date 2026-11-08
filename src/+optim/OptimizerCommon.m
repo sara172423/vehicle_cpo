@@ -42,6 +42,9 @@ classdef OptimizerCommon
                     for j = 1:numel(dom)
                         q(j) = vefc.Evaluator.candidate(ctx, state, t, dom(j));
                     end
+                    if nargin >= 4 && ~isempty(budget)
+                        budget.recordGreedyCandidates(numel(dom));
+                    end
                     [~, ix] = sortrows([-q, ctx.providerId(dom)], [1 2]);
                     chosen = ix(1);
                     if s > 1 && g == mutation && numel(ix) > 1
@@ -164,7 +167,7 @@ classdef OptimizerCommon
         end
 
         function h = historyRow(iter, budget, s, p)
-            h = struct('iteration', iter, 'functionEvaluations', budget.Count, 'bestTotalEfficiency', s, 'populationTotalEfficiencies', [], 'diagnostics', struct());
+            h = struct('iteration', iter, 'functionEvaluations', budget.Count, 'bestTotalEfficiency', s, 'populationTotalEfficiencies', [], 'diagnostics', budget.diagnostics());
             if nargin > 3
                 h.populationTotalEfficiencies = p(:)';
             end

@@ -234,7 +234,13 @@ function [bestSolution, evaluation, history] = gpc(ctx, cfg)
 
     function h = record(i, mp, movement, trials)
         h = optim.OptimizerCommon.historyRow(i, b, score, populationScores);
-        h.diagnostics = struct('current_pharaoh_score', populationScores(1), 'accepted_moves', accepted, 'abandoned_workers', abandoned, 'generated_replacements', replacements, 'stagnation_count', stagnation, 'mutation_probability', mp, 'mean_substituted_tasks', vefc.FormulaLibrary.sumOrdered(movement) / max(1, numel(movement)), 'local_refinement_trials', trials, 'population_unique_count', size(population, 1), 'population_mean_hamming', optim.OptimizerCommon.diversity(population));
+        algorithmDiagnostics = struct('current_pharaoh_score', populationScores(1), 'accepted_moves', accepted, 'abandoned_workers', abandoned, 'generated_replacements', replacements, 'stagnation_count', stagnation, 'mutation_probability', mp, 'mean_substituted_tasks', vefc.FormulaLibrary.sumOrdered(movement) / max(1, numel(movement)), 'local_refinement_trials', trials, 'population_unique_count', size(population, 1), 'population_mean_hamming', optim.OptimizerCommon.diversity(population));
+        % Preserve budget NFE diagnostics alongside original optimizer diagnostics.
+        extraNames = fieldnames(algorithmDiagnostics);
+        for diagnosticIndex = 1:numel(extraNames)
+            keyName = extraNames{diagnosticIndex};
+            h.diagnostics.(keyName) = algorithmDiagnostics.(keyName);
+        end
     end
 
 end

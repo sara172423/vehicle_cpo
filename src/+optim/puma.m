@@ -224,7 +224,13 @@ function [bestSolution, evaluation, history] = puma(ctx, cfg)
 
     function h = record(i, phase, generated, accepted, scores)
         h = optim.OptimizerCommon.historyRow(i, b, score, populationScores);
-        h.diagnostics = struct('population_unique_count', size(population, 1), 'population_mean_hamming', optim.OptimizerCommon.diversity(population), 'selected_phase', phase, 'phase_scores', scores, 'pcr', pcr, 'generated_trials', generated, 'accepted_candidates', accepted, 'search_progress', progress(i));
+        algorithmDiagnostics = struct('population_unique_count', size(population, 1), 'population_mean_hamming', optim.OptimizerCommon.diversity(population), 'selected_phase', phase, 'phase_scores', scores, 'pcr', pcr, 'generated_trials', generated, 'accepted_candidates', accepted, 'search_progress', progress(i));
+        % Preserve budget NFE diagnostics alongside original optimizer diagnostics.
+        extraNames = fieldnames(algorithmDiagnostics);
+        for diagnosticIndex = 1:numel(extraNames)
+            keyName = extraNames{diagnosticIndex};
+            h.diagnostics.(keyName) = algorithmDiagnostics.(keyName);
+        end
     end
 
 end

@@ -8,15 +8,15 @@ function cfg = validateConfig(cfg, d)
     cfg = base;
 
     f = lower(strrep(strrep(char(cfg.figure), '-', '_'), ' ', '_'));
-    aliases = {'6', '7', '8', '9', '10', 'fig6', 'fig7', 'fig8', 'fig9', 'fig10'};
+    aliases = {'6', '7', '8', '9', '10', '11', 'fig6', 'fig7', 'fig8', 'fig9', 'fig10', 'fig11'};
     ix = find(strcmp(f, aliases), 1);
     if ~isempty(ix)
-        f = sprintf('figure_%d', 6 + mod(ix - 1, 5));
+        f = sprintf('figure_%d', 6 + mod(ix - 1, 6));
     end
     if strcmp(f, '*')
         f = 'all';
     end
-    assert(ismember(f, {'figure_6', 'figure_7', 'figure_8', 'figure_9', 'figure_10', 'all'}), 'Unsupported figure');
+    assert(ismember(f, {'figure_6', 'figure_7', 'figure_8', 'figure_9', 'figure_10', 'figure_11', 'all'}), 'Unsupported figure');
     assert(ismember(char(cfg.statisticsMode), {'scipy_1_17', 'none'}), 'Invalid statisticsMode');
     cfg.figure = f;
 
@@ -36,7 +36,7 @@ function cfg = validateConfig(cfg, d)
         end
     end
     cfg.algorithms = unique(cfg.algorithms, 'stable');
-    validAlgorithms = {'dcsga', 'cpo', 'dcpo_base', 'dcpo_criticality', 'dcpo_cache', 'gpc', 'gwo', 'puma'};
+    validAlgorithms = {'dcsga', 'cpo', 'gpc', 'gwo', 'puma'};
     assert(all(ismember(cfg.algorithms, validAlgorithms)), 'Unsupported algorithm');
 
     % Only two active scientific fitnesses are retained.
@@ -87,6 +87,9 @@ function cfg = validateConfig(cfg, d)
         cfg.repetitions = 1;
         if strcmp(f, 'figure_8')
             cfg.repetitions = 100;
+        elseif strcmp(f, 'figure_11')
+            % Replicated runs support an interpretable mean/uncertainty plot.
+            cfg.repetitions = 5;
         end
     end
     assert((strcmp(f, 'all') && isempty(cfg.repetitions)) || ...
@@ -110,7 +113,7 @@ function cfg = validateConfig(cfg, d)
     end
 
     if ~isempty(cfg.diagnosticVehicleCount)
-        assert(ismember(f, {'figure_6', 'figure_7'}) && ...
+        assert(ismember(f, {'figure_6', 'figure_7', 'figure_11'}) && ...
             all(isfinite(cfg.diagnosticVehicleCount)) && ...
             all(fix(cfg.diagnosticVehicleCount) == cfg.diagnosticVehicleCount) && ...
             all(cfg.diagnosticVehicleCount >= 2) && all(cfg.diagnosticVehicleCount <= 76));

@@ -14,10 +14,7 @@ Only the optimizer families currently used in this project are enabled:
 | MATLAB ID | Meaning |
 |---|---|
 | `dcsga` (alias: `cuckoo`) | Paper-aligned discrete Cuckoo / DCSGA baseline |
-| `cpo` | Full proposed CPO variant |
-| `dcpo_base` | Base CPO ablation |
-| `dcpo_criticality` | CPO + criticality guidance |
-| `dcpo_cache` | CPO + cache guidance |
+| `cpo` | Paper-based CPO defense equations with VEFC-specific categorical projection |
 | `gwo` | Discrete Grey Wolf Optimizer |
 | `gpc` | Discrete Giza Pyramids Construction optimizer |
 | `puma` | Discrete Puma Optimizer |
@@ -213,3 +210,53 @@ The full MATLAB `results` structure is returned in memory. Save it manually only
 - For final claims use independent held-out seeds and report mean/dispersion, paired tests and effect sizes.
 - MEC load balance is **MEC-server load balance**, not whole-system/user fairness.
 - A no-MEC-use solution has mathematically equal zero MEC loads; always inspect `mec_task_count_total` alongside Jain/load imbalance so zero utilization is not misinterpreted as useful balance.
+
+
+## Figure 11 — MEC load-balance comparison (original research addition)
+
+Figure 11 is **not** in the original Cuckoo paper. It uses the same seven
+mission-vehicle counts as Figure 7 (52, 56, 60, 64, 68, 72, 76) and plots
+**Jain fairness of total MEC busy time** (Y, range 0–1; higher means more
+balanced) against **number of mission vehicles** (X). It draws a different
+curve for every optimizer in `cfg.algorithms`; results are averaged over
+independent seeds, with +/- one standard deviation shown when available.
+
+To choose Fitness 1 or Fitness 2, set `cfg.fitnesses` to a single ID. To
+run both, pass both IDs: separate `fitness_1/figure_11.png` and
+`fitness_load_aware/figure_11.png` (and corresponding PDFs) are saved.
+
+```matlab
+startup
+cfg = defaultConfig();
+cfg.figure = 'figure_11';
+cfg.algorithms = {'dcsga','cpo','gpc','gwo','puma'};
+cfg.fitnesses = {'fitness_1','fitness_load_aware'};  % Or choose one
+cfg.experimentMode = 'fair_optimizer_comparison';
+cfg.maxFunctionEvaluations = 1000;
+cfg.tmax = 300;
+cfg.populationSize = 50;
+cfg.repetitions = 5;
+cfg.seedStart = 101;
+cfg.loadAwareWeight = 0.05;
+cfg.outputDir = fullfile(pwd, 'results', 'figure_11_all');
+results = run_experiment(cfg);
+```
+
+For 5 optimizers, 2 fitness definitions, 7 vehicle counts and 5 seeds,
+this requires **350 optimization runs**. For a short smoke run select fewer
+vehicle counts using `cfg.diagnosticVehicleCount=[52 76]` and fewer seeds.
+
+**Interpretation warning:** a Jain value near 1 describes equal MEC busy
+loads, not high utilization or better delay/energy. `FitnessLibrary` currently
+returns Jain=1 when all MECs are idle, which is a 0/0 mathematical case;
+Figure 11 warns when such runs occur. Do not compare the numerical values
+of different fitness objective functions to choose a winner.
+
+
+## CPO implementation and archived variant (2026-11-08)
+
+`src/+optim/cpo.m` is now the former article-based implementation previously named `cpo_article.m`. It applies the paper-based CPO defense update equations in a continuous one-hot embedding, followed by a VEFC-specific categorical projection. The projection is a bounded-edit/Hamming-neighborhood rule; it is an adaptation for the VEFC assignment problem, not an equation from the CPO paper.
+
+The former discrete VEFC-specific implementation of `cpo.m` has been preserved, without changing its source code, at `trash/cpo.m`. It is archived and is not dispatched by the active benchmark runner. Its `dcpo_base`, `dcpo_criticality`, and `dcpo_cache` variants are therefore no longer active algorithm IDs.
+
+The active CPO retains immediate one-parent/one-child greedy acceptance after each NEW fitness evaluation, and uses the shared VEFC linear defense schedule from `optim.cpoDefenseSchedule` (25/25/40/10 initially, moving to 5/5/15/75). This is not the fixed defense schedule of the original CPO paper. The implementation is not a complete reproduction of the original continuous CPO: the one-hot representation, categorical projection, initialization, NFE clock, population handling, and some adaptation choices remain problem-specific. No System Model, evaluator, dataset, cache, fitness, or Cuckoo implementation was changed in this reorganization.

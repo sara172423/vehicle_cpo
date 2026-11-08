@@ -532,10 +532,22 @@ classdef ContextBuilder
             ctx.initialProviderFinish = zeros(P, 1);
             ctx.initialLinkFinish = zeros(P, P);
             if isfield(s, 'initialCache')
+                seenProviders = [];
                 for j = 1:numel(s.initialCache)
                     p = find(id == s.initialCache(j).provider_id, 1);
                     assert(~isempty(p), 'Cache provider outside mission domains');
-                    ctx.initialCache{p} = sort(unique(s.initialCache(j).task_type_ids(:)'));
+                    assert(~ismember(p, seenProviders), 'Duplicate initialCache provider');
+                    seenProviders(end + 1) = p; %#ok<AGROW>
+                    types = double(s.initialCache(j).task_type_ids(:)');
+                    assert(all(isfinite(types)) && all(types == fix(types)) && ...
+                        all(types >= 1) && all(types <= K) && ...
+                        all(ismember(types, [d.task_types.id])), ...
+                        'Unknown task type in initialCache');
+                    types = sort(unique(types));
+                    bytes = sum(ceil(ctx.serviceBits(types) / 8));
+                    assert(bytes <= ctx.providerCache(p), ...
+                        'Initial cache exceeds provider storage capacity');
+                    ctx.initialCache{p} = types;
                 end
             end
             if isfield(s, 'providerQueues')

@@ -1,11 +1,12 @@
 function [bestSolution, evaluation, history] = cpo(ctx, cfg)
 
     %% 1. Settings and shared evaluation budget
+    % CPO equations + one-hot projection; parent-wise acceptance per Algorithm 1.
+    % Four original CPO equations + categorical one-hot projection.
+    % Shared time-varying defense selection uses the search NFE clock.
     variant = 'cpo';
-    if isfield(cfg, 'variant')
-        variant = cfg.variant;
-    end
-    guide = buildGuidance(ctx, variant);
+    guide = struct('critical', false, 'cache', false, 'memory', false, 'model', false);
+    offsets = articleOffsets(ctx);
     populationSize = cfg.populationSize;
     searchIterations = max(0, cfg.tmax - 1);
     rng = optim.PythonRandom(ctx.seed);
@@ -21,9 +22,6 @@ function [bestSolution, evaluation, history] = cpo(ctx, cfg)
     bestSolution = population(1, :);
     bestScore = scores(1);
     memory = [];
-    if guide.memory
-        memory = initializeSuccessMemory(ctx);
-    end
     stagnation = 0;
     history = record(0, populationSize, 0, 0, 0, zeros(1, 5), 0, false);
     %% 3. Search: cyclic active population and four defenses
@@ -35,27 +33,24 @@ function [bestSolution, evaluation, history] = cpo(ctx, cfg)
         minimum = max(2, min(populationSize, optim.PythonRandom.roundEven(populationSize * .8)));
         phase = mod(progress * 2, 1);
         activeCount = max(minimum, min(populationSize, ceil(populationSize - (populationSize - minimum) * phase)));
-        if ~isempty(memory)
-            decaySuccessMemory();
-        end
         current = population;
         currentScores = scores;
-        elites = population(1:min(8, populationSize), :);
+        articleX = articleEncodePopulation(current, ctx, offsets);
+        bestKeys = articleEncode(bestSolution, ctx, offsets);
         indices = 1:min(activeCount, size(population, 1));
         if populationSize > activeCount
             tail = rng.shuffle(activeCount + 1:populationSize);
             n = max(1, floor(activeCount / 5));
             indices = [indices(1:end - n) tail(1:min(n, numel(tail)))];
         end
-        candidates = zeros(0, ctx.dimension);
-        candidateScores = [];
-        improvements = struct([]);
         accepted = 0;
+        previous = bestScore;
         attempts = 0;
         generated = 0;
         counts = zeros(1, 5);
         target = min(activeCount, budget.remaining());
-        schedule = defenseSchedule(target, progress, stagnation, memory, rng);
+        % Custom linear defense schedule follows SEARCH NFE (initialization excluded).
+        % All other VEFC search operators keep their existing progress schedule.
         before = budget.Count;
         maxAttempts = max(activeCount * 10, target * 12);
         cursor = 0;
@@ -65,24 +60,18 @@ function [bestSolution, evaluation, history] = cpo(ctx, cfg)
             cursor = cursor + 1;
             parent = current(ix, :);
             parentScore = currentScores(ix);
-            peers = current(~all(bsxfun(@eq, current, parent), 2), :);
-            if isempty(peers)
-                peers = current;
-            end
-            escape = stagnation >= 3 && rng.random() < .15;
-            if escape
-                strategy = 1;
-                counts(5) = counts(5) + 1;
-            else
-                completed = budget.Count - before;
-                if completed < numel(schedule)
-                    strategy = schedule(completed + 1);
-                else
-                    strategy = chooseDefense(progress, stagnation, memory, rng);
-                end
-            end
+            % Update linear defense probabilities before each defense choice using actual NFE.
+            defenseProgress = optim.OptimizerCommon.progress( ...
+                budget.Count, initialEvaluations, budget.Maximum, ...
+                iteration - 1, searchIterations);
+            % No stagnation override, strategy-memory bias, or forced quotas.
+            strategy = optim.cpoDefenseSchedule(defenseProgress, rng);
             counts(strategy) = counts(strategy) + 1;
-            child = generateCandidate(strategy, parent, bestSolution, peers, ctx, guide, progress, rng, memory, elites);
+            % The defense equations are applied before discrete projection.
+            % No additional full fitness evaluations are performed here.
+            child = articleCandidate(strategy, ix, current, currentScores, ...
+                articleX, bestKeys, bestSolution, ctx, offsets, rng, budget.Cache, ...
+                defenseProgress);
             [childEv, isNew] = budget.evaluate(child);
             if isempty(childEv)
                 break
@@ -92,34 +81,25 @@ function [bestSolution, evaluation, history] = cpo(ctx, cfg)
             end
             generated = generated + 1;
             score = childEv.score;
-            if score > parentScore + 1e-12
-                improvementRecord = struct('child', child, 'parent', parent, 'strategy', strategy, 'gain', score - parentScore);
-                if isempty(improvements)
-                    improvements = improvementRecord;
-                else
-                    improvements(end + 1) = improvementRecord;
-                end
-            end
-            candidates(end + 1, :) = child;
-            candidateScores(end + 1, 1) = score;
-        end
-        previous = bestScore;
-        [population, scores] = optim.OptimizerCommon.sortUnique([current; candidates], [currentScores; candidateScores]);
-        assert(size(population, 1) >= populationSize);
-        population = population(1:populationSize, :);
-        scores = scores(1:populationSize);
-        for row = improvements
-            if any(all(bsxfun(@eq, population, row.child), 2))
+            % Parent-wise GREEDY replacement, immediately after evaluation.
+            % A child may replace ONLY the parent at index ix, never a weaker stranger.
+            [current, currentScores, didAccept] = optim.cpoParentAccept( ...
+                current, currentScores, ix, child, score);
+            if didAccept
                 accepted = accepted + 1;
-                if ~isempty(memory)
-                    rewardSuccessMemory(row.strategy, row.child, row.parent, row.gain);
+                articleX(ix, :) = articleEncode(child, ctx, offsets);
+                if score > bestScore + 1e-12
+                    bestSolution = child;
+                    bestScore = score;
+                    bestKeys = articleEncode(bestSolution, ctx, offsets);
                 end
             end
         end
-        if scores(1) > bestScore + 1e-12
-            bestSolution = population(1, :);
-            bestScore = scores(1);
-        end
+        % Sort ONLY the surviving parent slots for the next generation.
+        % No merging/truncation of parent+child candidates is performed.
+        [scores, order] = sort(currentScores, 'descend');
+        population = current(order, :);
+        assert(size(population, 1) == populationSize);
         if bestScore > previous + 1e-12
             stagnation = 0;
         else
@@ -146,408 +126,205 @@ function [bestSolution, evaluation, history] = cpo(ctx, cfg)
             taskEntries = nnz(memory.taskProvider);
             serviceEntries = nnz(memory.serviceProvider);
         end
-        h.diagnostics = struct('active_population_size', activeCount, 'generated_trials', generated, 'unique_trial_count', generated, 'accepted_candidates', accepted, 'candidate_attempts', attempts, 'duplicate_trial_count', max(0, attempts - generated), 'stagnation_generations', stagnation, 'search_progress', progress, 'best_improved', improved, 'cpo_variant', variant, 'criticality_guidance', guide.critical, 'cache_coupling', guide.cache, 'success_memory', guide.memory, 'model_guidance', guide.model, 'defense_trials', counts, 'cpo_strategy_credit', credit, 'cpo_accepted_by_strategy', acceptedBy, 'cpo_task_provider_memory_entries', taskEntries, 'cpo_service_provider_memory_entries', serviceEntries, 'population_unique_count', size(population, 1), 'population_mean_hamming', optim.OptimizerCommon.diversity(population));
-    end
-
-    function decaySuccessMemory()
-        memory.strategy = max(.05, .9 * memory.strategy);
-        memory.taskProvider = .9 * memory.taskProvider;
-        memory.serviceProvider = .9 * memory.serviceProvider;
-        memory.taskProvider(memory.taskProvider < 1e-10) = 0;
-        memory.serviceProvider(memory.serviceProvider < 1e-10) = 0;
-    end
-
-    function rewardSuccessMemory(strategy, child, parent, gain)
-        if gain <= 0
-            return
-        end
-        s = min(2, .25 + log1p(gain));
-        memory.strategy(strategy) = memory.strategy(strategy) + s;
-        memory.accepted(strategy) = memory.accepted(strategy) + 1;
-        changed = find(child ~= parent);
-        if isempty(changed)
-            return
-        end
-        for g = changed
-            memory.taskProvider(g, child(g)) = memory.taskProvider(g, child(g)) + s / numel(changed);
-            memory.serviceProvider(memory.types(g), child(g)) = memory.serviceProvider(memory.types(g), child(g)) + s / numel(changed);
+        algorithmDiagnostics = struct('active_population_size', activeCount, 'generated_trials', generated, 'unique_trial_count', generated, 'accepted_candidates', accepted, 'candidate_attempts', attempts, 'duplicate_trial_count', max(0, attempts - generated), 'stagnation_generations', stagnation, 'search_progress', progress, 'best_improved', improved, 'cpo_variant', variant, 'criticality_guidance', guide.critical, 'cache_coupling', guide.cache, 'success_memory', guide.memory, 'model_guidance', guide.model, 'defense_trials', counts, 'cpo_strategy_credit', credit, 'cpo_accepted_by_strategy', acceptedBy, 'cpo_task_provider_memory_entries', taskEntries, 'cpo_service_provider_memory_entries', serviceEntries, 'population_unique_count', size(population, 1), 'population_mean_hamming', optim.OptimizerCommon.diversity(population));
+        % Preserve budget NFE diagnostics alongside original optimizer diagnostics.
+        extraNames = fieldnames(algorithmDiagnostics);
+        for diagnosticIndex = 1:numel(extraNames)
+            keyName = extraNames{diagnosticIndex};
+            h.diagnostics.(keyName) = algorithmDiagnostics.(keyName);
         end
     end
 
 end
 
-%% DAG, deadline, cache and computation guidance (proposal only)
-
-function guide = buildGuidance(ctx, variant)
-    D = ctx.dimension;
-    P = ctx.providerCount;
-    tasks = ctx.optimTaskIds;
-    guide = struct('critical', true, 'cache', true, 'memory', true, 'model', true, 'deadline', true, 'prior', zeros(D, P), 'energy', zeros(1, D), 'affinity', zeros(D, P), 'structural', zeros(1, D));
-    if strcmp(variant, 'dcpo_base')
-        guide.critical = false;
-        guide.cache = false;
-        guide.memory = false;
-        guide.model = false;
-        guide.deadline = false;
-    elseif strcmp(variant, 'dcpo_criticality')
-        guide.cache = false;
-        guide.memory = false;
-        guide.model = false;
-        guide.deadline = false;
-    elseif strcmp(variant, 'dcpo_cache')
-        guide.critical = false;
-        guide.memory = false;
-        guide.model = false;
-        guide.deadline = false;
-    else
-        assert(strcmp(variant, 'cpo'));
-    end
-    reach = zeros(1, D);
-    for g = 1:D
-        t = tasks(g);
-        a = ctx.taskApp(t);
-        dom = ctx.domain{t};
-        time = zeros(size(dom));
-        energy = time;
-        for j = 1:numel(dom)
-            [time(j), energy(j)] = vefc.Evaluator.compute(ctx, a, dom(j), t, ctx.initialCache);
-        end
-        cost = ctx.alpha(a) * time / ctx.modelTref(a) + ctx.beta(a) * energy / ctx.modelElocal(a);
-        lo = min(cost);
-        hi = max(cost);
-        span = hi - lo;
-        if hi <= lo + 1e-18
-            prior = .5 * ones(size(cost));
-        else
-            prior = (hi - cost) / span;
-        end
-        guide.prior(g, dom) = prior;
-        guide.energy(g) = min(1, ctx.beta(a) * (max(energy) - min(energy)) / max(ctx.modelElocal(a), 1e-18));
-        seen = [];
-        todo = ctx.children{t};
-        while ~isempty(todo)
-            ch = todo(1);
-            todo(1) = [];
-            if ismember(ch, seen)
-                continue
-            end
-            seen(end + 1) = ch;
-            todo = [todo ctx.children{ch}];
-        end
-        reach(g) = numel(seen);
-        future = tasks(g + 1:end);
-        future = future(ctx.taskType(future) == ctx.taskType(t));
-        bytes = ceil(ctx.serviceBits(ctx.taskType(t)) / 8);
-        for p = dom
-            if bytes > 0 && ctx.providerCache(p) >= bytes && ~isempty(future)
-                guide.affinity(g, p) = sum(cellfun(@(v)ismember(p, v), ctx.domain(future))) / numel(future);
-            end
-        end
-    end
-    guide.structural = .65 * normalizeGuidance(ctx.globalRank(tasks)', .5) + .35 * normalizeGuidance(reach, .5);
-end
-
-function v = normalizeGuidance(v, neutral)
-    lo = min(v);
-    hi = max(v);
-    if hi <= lo
-        v = ones(size(v)) * neutral;
-    else
-        v = (v - lo) / (hi - lo);
+%% Categorical embedding: one one-hot block for each VEFC task.
+% This is a VEFC adaptation, not a formula from Abdel-Basset et al.
+function offsets = articleOffsets(ctx)
+    offsets = zeros(1, ctx.dimension + 1);
+    for g = 1:ctx.dimension
+        offsets(g+1) = offsets(g) + numel(ctx.domain{ctx.optimTaskIds(g)});
     end
 end
 
-function rank = taskCriticality(guide, ctx, indices)
-    if ~guide.critical
-        rank = ones(size(indices));
-        return
-    end
-    v = guide.structural(indices);
-    lo = min(v);
-    hi = max(v);
-    if hi <= lo
-        rank = ones(size(v));
-    else
-        rank = .25 + .75 * (v - lo) / (hi - lo);
-    end
-    if guide.deadline
-        d = 1 ./ ctx.deadline(ctx.taskApp(ctx.optimTaskIds(indices)))';
-        d = normalizeGuidance(d, 1);
-        rank = .7 * rank + .3 * d;
-    end
-end
-
-%% The four discrete CPO defenses
-
-function child = generateCandidate(strategy, current, bestSolution, peers, ctx, guide, progress, rng, memory, elites)
-    peerA = peers(rng.randbelow(size(peers, 1)) + 1, :);
-    peerB = peers(rng.randbelow(size(peers, 1)) + 1, :);
-    D = numel(current);
-    indices = 1:D;
-    child = current;
-    rank = taskCriticality(guide, ctx, indices);
-    % Sight/sound: explore disagreements with peers and the best solution.
-    if strategy <= 2
-        if strategy == 1
-            peerB = peerA;
-        end
-        disagreement = (bestSolution ~= current) + (peerA ~= current) + (peerB ~= current);
-        structural = ones(1, D);
-        if guide.critical
-            structural = 1.25 - rank;
-        end
-        count = max(1, min(D, ceil(2 + (max(2, ceil(log2(D + 1))) - 2) * (1 - progress))));
-        chosen = optim.OptimizerCommon.weighted(indices, 1 + 1.15 * disagreement + .85 * structural, count, rng);
-        for g = chosen
-            dom = ctx.domain{ctx.optimTaskIds(g)};
-            alternatives = dom(dom ~= current(g));
-            if strategy == 1
-                suggested = [peerA(g) bestSolution(g)];
-                suggested = suggested(ismember(suggested, dom) & suggested ~= current(g));
-                if ~isempty(suggested) && rng.random() < .65
-                    p = rng.choice(suggested);
-                else
-                    p = sampleProvider(g, alternatives, memory, rng, .60);
-                end
-            else
-                candidates = [peerA(g) peerB(g) bestSolution(g)];
-                candidates = candidates(ismember(candidates, dom) & candidates ~= current(g));
-                if ~isempty(candidates) && rng.random() < .80
-                    ids = optim.PythonRandom.intSetOrder(ctx.providerId(candidates)');
-                    [~, providers] = ismember(ids, ctx.providerId);
-                    weights = arrayfun(@(p)sum(candidates == p), providers);
-                    p = optim.OptimizerCommon.weighted(providers, weights, 1, rng);
-                else
-                    p = sampleProvider(g, alternatives, memory, rng, .45);
-                end
-            end
-            if ~isempty(p)
-                child(g) = p;
-            end
-        end
-        % Odor: use later same-service tasks and capacity-feasible cache affinity.
-    elseif strategy == 3
-        count = max(1, min(D, ceil(1 + 3 * (1 - progress))));
-        energy = guide.energy;
-        if ~guide.model
-            energy(:) = 0;
-        end
-        weights = rank .* (.35 + 1.65 * (bestSolution ~= current)) .* (1 + .35 * energy);
-        anchor = optim.OptimizerCommon.weighted(indices, weights, 1, rng);
-        types = ctx.taskType(ctx.optimTaskIds);
-        same = [];
-        if guide.cache
-            same = find(indices > anchor & types' == types(anchor));
-        end
-        extra = max(0, count - 1);
-        if ~isempty(same)
-            extra = max(1, extra);
-        end
-        chosen = [anchor optim.OptimizerCommon.weighted(same, .40 + rank(same), extra, rng)];
-        selectedAnchor = [];
-        for g = chosen
-            dom = ctx.domain{ctx.optimTaskIds(g)};
-            alternatives = dom(dom ~= current(g));
-            elite = bestSolution(g);
-            shared = bestSolution(anchor);
-            if g ~= anchor && ~isempty(selectedAnchor)
-                shared = selectedAnchor;
-            end
-            if ~ismember(shared, dom)
-                shared = [];
-            end
-            affinity = [];
-            if guide.cache && ~isempty(alternatives)
-                scores = guide.affinity(g, alternatives);
-                mx = max(scores);
-                if mx > 0
-                    affinity = rng.choice(alternatives(abs(scores - mx) <= 1e-12));
-                end
-            end
-            if g ~= anchor && ~isempty(selectedAnchor) && ismember(selectedAnchor, dom)
-                p = selectedAnchor;
-            elseif ~isempty(affinity) && rng.random() < .45
-                p = affinity;
-            elseif ~isempty(shared) && shared ~= current(g) && rng.random() < .55
-                p = shared;
-            elseif ismember(elite, dom) && elite ~= current(g) && rng.random() < .80
-                p = elite;
-            else
-                [providers, votes] = eliteProviderVotes(elites, g, alternatives);
-                if ~isempty(votes) && rng.random() < .70
-                    p = optim.OptimizerCommon.weighted(providers, votes, 1, rng);
-                else
-                    p = guidedProvider(g, alternatives, guide, memory, rng, progress, .20);
-                end
-            end
-            if ~isempty(p)
-                child(g) = p;
-                if g == anchor
-                    selectedAnchor = p;
-                end
-            elseif g == anchor
-                selectedAnchor = current(g);
-            end
-        end
-        % Physical attack: refine one task around the best/elite solutions.
-    elseif strategy == 4
-        if rng.random() < .88
-            child = bestSolution;
-        end
-        weights = zeros(1, D);
-        mutable = [];
-        energy = guide.energy;
-        if ~guide.model
-            energy(:) = 0;
-        end
-        for g = indices
-            dom = ctx.domain{ctx.optimTaskIds(g)};
-            alt = dom(dom ~= child(g));
-            if isempty(alt)
-                continue
-            end
-            mutable(end + 1) = g;
-            [providers, votes] = eliteProviderVotes(elites, g, dom);
-            disagreement = 0;
-            if ~isempty(votes)
-                total = vefc.FormulaLibrary.pythonSum(votes);
-                same = vefc.FormulaLibrary.pythonSum(votes(providers == child(g)));
-                disagreement = max(0, 1 - same / max(1e-12, total));
-            end
-            weights(g) = .25 + rank(g) + 2.25 * disagreement + .75 * energy(g);
-        end
-        if isempty(mutable)
-            return
-        end
-        g = optim.OptimizerCommon.weighted(mutable, weights(mutable), 1, rng);
+function keys = articleEncode(plan, ctx, offsets)
+    keys = zeros(1, offsets(end));
+    for g = 1:ctx.dimension
         dom = ctx.domain{ctx.optimTaskIds(g)};
-        alt = dom(dom ~= child(g));
-        [providers, votes] = eliteProviderVotes(elites, g, alt);
-        if ~isempty(votes) && rng.random() < .68
-            p = optim.OptimizerCommon.weighted(providers, votes, 1, rng);
-        else
-            p = guidedProvider(g, alt, guide, memory, rng, progress, .10 + .12 * (1 - progress));
-        end
-        child(g) = p;
-    else
-        error('Unknown defense');
-    end
-    if isequal(child, current)
-        mutable = [];
-        for g = indices
-            if any(ctx.domain{ctx.optimTaskIds(g)} ~= current(g))
-                mutable(end + 1) = g;
-            end
-        end
-        if ~isempty(mutable)
-            g = rng.choice(mutable);
-            dom = ctx.domain{ctx.optimTaskIds(g)};
-            child(g) = sampleProvider(g, dom(dom ~= current(g)), memory, rng, .35);
-        end
+        j = find(dom == plan(g), 1);
+        assert(~isempty(j), 'CPO article: provider outside task domain');
+        keys(offsets(g)+j) = 1;
     end
 end
 
-%% Provider selection using the same success memory
-
-function p = sampleProvider(g, alternatives, memory, rng, floor)
-    p = [];
-    if isempty(alternatives)
-        return
-    end
-    if isempty(memory) || rng.random() < floor
-        p = rng.choice(alternatives);
-    else
-        weights = .05 + providerMemoryScores(memory, g, alternatives);
-        p = optim.OptimizerCommon.weighted(alternatives, weights, 1, rng);
+function X = articleEncodePopulation(population, ctx, offsets)
+    X = zeros(size(population, 1), offsets(end));
+    for i = 1:size(population, 1)
+        X(i, :) = articleEncode(population(i, :), ctx, offsets);
     end
 end
 
-function p = guidedProvider(g, alt, guide, memory, rng, progress, floor)
-    p = [];
-    if isempty(alt)
-        return
-    end
-    if guide.model && any(guide.prior(g, alt) > 0) && rng.random() < .35 * (.55 + .45 * progress)
-        p = optim.OptimizerCommon.weighted(alt, .05 + guide.prior(g, alt), 1, rng);
+function child = articleCandidate(which, parentIndex, population, scores, X, best, bestPlan, ctx, offsets, rng, cache, progress)
+    % Abdel-Basset et al., Knowledge-Based Systems 284 (2024) 111257.
+    % Equations (4),(5),(6),(7)-(10),(11),(13) are applied in one-hot space.
+    % The article is continuous; the subsequent categorical projection is
+    % an explicitly added, problem-specific discretization of the trial.
+    N = size(X, 1);
+    K = size(X, 2);
+    x = X(parentIndex, :);
+    choose = @() rng.randbelow(N) + 1;
+
+    if which == 1  % Sight: Eqs. (4)-(5)
+        j = choose();
+        y = (x + X(j, :)) / 2;
+        trial = x + rng.gauss(0, 1) .* abs(2 * rng.random() * best - y);
+
+    elseif which == 2  % Sound: Eqs. (5)-(6)
+        u = double(articleRandomVector(rng, K) > rng.random());
+        j = choose(); r1 = choose(); r2 = choose();
+        y = (x + X(j, :)) / 2;
+        trial = (1 - u) .* x + u .* (y + rng.random() * (X(r1, :) - X(r2, :)));
+
+    elseif which == 3 || which == 4  % Odor or physical attack
+        delta = 2 * double(articleRandomVector(rng, K) <= .5) - 1; % Eq. (8)
+        % NFE is the effective time horizon: the search stops at its NFE
+        % budget long before cfg.tmax in the VEFC benchmark.
+        time = min(1, max(0, progress));
+        gamma = 2 * rng.random() * (1 - time)^time;                % Eq. (9), NFE clock
+        % Original CPO uses a minimization objective; VEFC maximizes Score.
+        % f=-Score reverses the ordering without recomputing fitness.
+        f = -double(scores(:));
+        denominator = sum(f);
+        assert(isfinite(denominator) && ...
+            abs(denominator) > 1e-12 * max(1, sum(abs(f))), ...
+            'CPO paper odor coefficient undefined for near-zero fitness sum');
+        odor = exp(f(parentIndex) / (denominator + eps));           % Eq. (10)
+        assert(isfinite(odor), 'CPO paper odor coefficient overflow');
+
+        if which == 3 % Odor: Eq. (7)
+            u = double(articleRandomVector(rng, K) > rng.random());
+            r1 = choose(); r2 = choose(); r3 = choose();
+            trial = (1 - u) .* x + u .* (X(r1, :) + odor * ...
+                (X(r2, :) - X(r3, :)) - rng.random() * delta * gamma * odor);
+        else % Physical attack: Eqs. (11),(13)
+            j = choose();
+            force = articleRandomVector(rng, K) .* (odor * (X(j, :) - x));
+            tau4 = rng.random(); tau5 = rng.random();
+            alpha = .1; % CPO original, Table 2; not ctx.alpha (VEFC weight).
+            trial = best + (alpha * (1 - tau4) + tau4) .* ...
+                (delta .* best - x) - tau5 * delta .* gamma .* force;
+        end
     else
-        p = sampleProvider(g, alt, memory, rng, floor);
+        error('Unsupported CPO paper defense');
+    end
+    assert(all(isfinite(trial)), 'CPO paper generated non-finite trial');
+
+    % Continuous CPO bounds handling: re-enter [0,1] uniformly.
+    outside = trial < 0 | trial > 1;
+    if any(outside)
+        replacement = articleRandomVector(rng, nnz(outside));
+        trial(outside) = replacement;
+    end
+    child = articleProject(trial, population(parentIndex, :), bestPlan, which, progress, ctx, offsets, cache, rng);
+end
+
+function values = articleRandomVector(rng, n)
+    values = zeros(1, n);
+    for j = 1:n
+        values(j) = rng.random();
     end
 end
 
-function [providers, votes] = eliteProviderVotes(elites, g, dom)
-    providers = [];
-    votes = [];
-    for i = 1:min(8, size(elites, 1))
-        p = elites(i, g);
-        if ~ismember(p, dom)
+function plan = articleProject(trial, parent, bestPlan, which, progress, ctx, offsets, cache, rng)
+    % VEFC-specific categorical projection of the ORIGINAL continuous CPO
+    % trial.  The CPO defense formulas are unchanged before this point.
+    %
+    % A full per-task argmax changes too many DAG-coupled assignments at
+    % once and can destroy a good greedy schedule.  Project to a bounded
+    % number of provider edits (trust-region/Hamming projection) instead.
+    % The radius is a projection parameter, NOT a CPO/ACCPO equation.
+    D = ctx.dimension;
+    if which <= 2
+        anchor = parent;       % Exploration near the current individual.
+    else
+        anchor = bestPlan;     % Exploitation around the best known plan.
+    end
+    plan = anchor;
+    alternative = anchor;
+    margin = -inf(1, D);
+    mutable = zeros(1, D);
+    nMutable = 0;
+    for g = 1:D
+        dom = ctx.domain{ctx.optimTaskIds(g)};
+        if numel(dom) <= 1
             continue
         end
-        j = find(providers == p, 1);
-        if isempty(j)
-            providers(end + 1) = p;
-            votes(end + 1) = 1 / i;
-        else
-            votes(j) = votes(j) + 1 / i;
+        currentIdx = find(dom == anchor(g), 1);
+        assert(~isempty(currentIdx), 'CPO article: anchor outside task domain');
+        q = trial(offsets(g)+1:offsets(g+1));
+        anchorScore = q(currentIdx);
+        q(currentIdx) = -inf;
+        [altScore, altIdx] = max(q);
+        alternative(g) = dom(altIdx);
+        margin(g) = altScore - anchorScore;
+        nMutable = nMutable + 1;
+        mutable(nMutable) = g;
+    end
+    mutable = mutable(1:nMutable);
+    if nMutable == 0
+        return
+    end
+
+    progress = max(0, min(1, progress));
+    scale = max(2, min(6, ceil(log2(D + 1))));
+    if which == 1                  % Sight: wider exploratory neighborhoods.
+        maxEdits = 1 + round((scale - 1) * (1 - progress));
+    elseif which == 2              % Sound: moderate exploration.
+        maxEdits = 1 + round((min(5, scale) - 1) * (1 - progress));
+    elseif which == 3              % Odor: gradually localize around best.
+        maxEdits = 1 + round(2 * (1 - progress));
+    else                           % Physical attack: one-task refinement.
+        maxEdits = 1;
+    end
+    maxEdits = max(1, min(nMutable, maxEdits));
+    editCount = 1 + rng.randbelow(maxEdits);
+
+    % Prefer task/provider changes with stronger CPO-derived evidence,
+    % while retaining a nonzero chance of exploring every mutable task.
+    evidence = margin(mutable);
+    evidence = max(-2, min(2, evidence));
+    weights = .1 + exp(2.5 * (evidence - max(evidence)));
+    sampleCount = min(nMutable, maxEdits);
+    order = optim.OptimizerCommon.weighted(mutable, weights, sampleCount, rng);
+    candidate = anchor;
+    for k = 1:numel(order)
+        g = order(k);
+        candidate(g) = alternative(g);
+        if k >= editCount && ~isKey(cache, optim.OptimizerCommon.key(candidate))
+            plan = candidate;
+            return
         end
     end
-end
 
-%% Defense selection and its minimum representation
-
-function strategy = chooseDefense(progress, stagnation, memory, rng)
-    base = [.24 * (1 - progress) + .06, .19 * (1 - progress) + .06, .18 + .08 * progress, .27 + .30 * progress];
-    escape = min(.12, .025 * max(0, stagnation));
-    base(1) = base(1) + escape;
-    base(4) = base(4) + .5 * escape;
-    learned = ones(1, 4) * .25;
-    if ~isempty(memory)
-        learned = max(.05, memory.strategy);
-        learned = learned / vefc.FormulaLibrary.pythonSum(learned);
-    end
-    strategy = optim.OptimizerCommon.weighted(1:4, max(.04, .78 * base + .22 * learned), 1, rng);
-end
-
-function schedule = defenseSchedule(count, progress, stagnation, memory, rng)
-    schedule = zeros(1, count);
-    for j = 1:count
-        schedule(j) = chooseDefense(progress, stagnation, memory, rng);
-    end
-    required = min(count, floor(count * [.10 .10 .16 .28]));
-    for strategy = 1:4
-        deficit = max(0, required(strategy) - sum(schedule == strategy));
-        for j = 1:deficit
-            counts = arrayfun(@(v)sum(schedule == v), 1:4);
-            donors = find(counts > required);
-            if isempty(donors)
-                break
+    % Only if local proposals are already in the evaluation cache, try
+    % uncached single-task alternatives. No extra fitness calls are made.
+    for k = 1:nMutable
+        g = mutable(k);
+        dom = ctx.domain{ctx.optimTaskIds(g)};
+        q = trial(offsets(g)+1:offsets(g+1));
+        [~, rank] = sort(q, 'descend');
+        for j = reshape(rank, 1, [])
+            if dom(j) == anchor(g)
+                continue
             end
-            [~, ix] = max(counts(donors) - required(donors));
-            donor = donors(ix);
-            schedule(find(schedule == donor, 1)) = strategy;
+            candidate = anchor;
+            candidate(g) = dom(j);
+            if ~isKey(cache, optim.OptimizerCommon.key(candidate))
+                plan = candidate;
+                return
+            end
         end
     end
-    schedule = rng.shuffle(schedule);
+    % All considered assignments have already been evaluated.
+    plan = anchor;
 end
 
-%% Success-memory state; local to this CPO run
-
-function memory = initializeSuccessMemory(ctx)
-    memory = struct('strategy', ones(1, 4), 'accepted', zeros(1, 4), ...
-                    'taskProvider', zeros(ctx.dimension, ctx.providerCount), ...
-                    'serviceProvider', zeros(numel(ctx.serviceBits), ctx.providerCount), ...
-                    'types', ctx.taskType(ctx.optimTaskIds));
-end
-
-function v = providerMemoryScores(memory, g, providers)
-    v = .65 * normalizeMemoryScores(memory.taskProvider(g, providers)) + (1 - .65) * normalizeMemoryScores(memory.serviceProvider(memory.types(g), providers));
-end
-
-function v = normalizeMemoryScores(v)
-    lo = min(v);
-    hi = max(v);
-    if hi <= lo
-        v = ones(size(v)) * (hi > 0);
-    else
-        v = (v - lo) / (hi - lo);
-    end
-end

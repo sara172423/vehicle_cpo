@@ -15,7 +15,9 @@ function list = scenarios(cfg, available)
                 assert(road >= n);
                 list.extensionRoadCount = road;
             end
-        case 'figure_7'
+        case {'figure_7', 'figure_11'}
+            % Figure 11 is an original load-balance comparison on the same
+            % mission-vehicle-count sweep as article Figure 7.
             values = [52 56 60 64 68 72 76];
             if ~isempty(diag)
                 values = diag;

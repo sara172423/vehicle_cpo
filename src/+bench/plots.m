@@ -98,6 +98,99 @@ function plots(results, cfg)
             applyCompletionAxis(ax, [rows.completion_rate], 'figure_7');
             title(ax, '(d)', 'FontWeight', 'normal');
 
+        case 'figure_11'
+            % Original research extension, NOT a figure of Shen et al. (2025).
+            % X: mission vehicles (same scenario sweep as paper Figure 7).
+            % Y: Jain fairness of total MEC busy time. Higher is more even.
+            % Multi-fitness output is already split into separate directories
+            % by selectFitness() above; never mix raw optimizer scores.
+            f = newFigure([100 100 1180 720]);
+            ax = axes('Parent', f, 'Position', [.095 .18 .72 .71]);
+            hold(ax, 'on');
+            names = unique({rows.algorithm}, 'stable');
+            counts = sort(unique([rows.mission_vehicle_count]));
+            handles = gobjects(1, numel(names));
+            anyNoMec = false;
+            for i = 1:numel(names)
+                r = rows(strcmp({rows.algorithm}, names{i}));
+                [~, ix] = sort([r.mission_vehicle_count]);
+                r = r(ix);
+                st = algorithmStyle(names{i}, i);
+
+                % Uncertainty: mean +/- one sample standard deviation across
+                % independent repetitions. No error bar for a single seed.
+                if isfield(r, 'load_jain_std') && isfield(r, 'sample_count')
+                    enough = [r.sample_count] > 1;
+                    if any(enough)
+                        values = [r.load_jain];
+                        spread = [r.load_jain_std];
+                        spread(~enough) = 0;
+                        whiskerColor = 0.65 * [1 1 1] + 0.35 * st.color;
+                        errorbar(ax, [r.mission_vehicle_count], values, ...
+                            spread, 'LineStyle', 'none', 'Color', whiskerColor, ...
+                            'LineWidth', .65, 'HandleVisibility', 'off');
+                    end
+                end
+                handles(i) = plot(ax, [r.mission_vehicle_count], [r.load_jain], ...
+                    st.lineStyle, 'Marker', st.marker, 'Color', st.color, ...
+                    'LineWidth', 1.9, 'MarkerSize', 6, ...
+                    'DisplayName', label(names{i}));
+            end
+            % Report the no-MEC convention: the current FitnessLibrary returns
+            % Jain=1 for zero load, a mathematically undefined 0/0 case.
+            a = results.executionAudit;
+            if ~isempty(a) && isfield(a, 'mec_busy_time_total_s')
+                a = a(strcmp({a.fitness_id}, rows(1).fitness_id));
+                anyNoMec = any([a.mec_busy_time_total_s] <= 1e-18);
+            end
+            xlabel(ax, 'Number of mission vehicles');
+            ylabel(ax, 'Jain fairness index of MEC busy time (higher is better)');
+            xticks(ax, counts);
+            % Jain is a bounded index. A disclosed zoom improves legibility
+            % when all values cluster close to 1; never truncate data.
+            spreadAll = [rows.load_jain];
+            if isfield(rows, 'load_jain_std')
+                spreadAll = spreadAll - [rows.load_jain_std];
+            end
+            if ~isempty(spreadAll) && min(spreadAll) >= 0.75
+                floorY = max(0, floor((min(spreadAll) - 0.025) * 20) / 20);
+                ylim(ax, [floorY 1]);
+                yticks(ax, linspace(floorY, 1, 6));
+                isZoomed = floorY > 0;
+            else
+                ylim(ax, [0 1]);
+                yticks(ax, 0:0.2:1);
+                isZoomed = false;
+            end
+            finishAxes(ax);
+            legend(ax, handles, cellfun(@label, names, 'UniformOutput', false), ...
+                'Location', 'eastoutside', 'Box', 'off', 'FontSize', 10);
+            if ~isempty(rows) && isfield(rows, 'fitness_id')
+                if strcmp(rows(1).fitness_id, 'fitness_1')
+                    title(ax, 'Figure 11 | MEC load balance | Fitness 1 (paper)', ...
+                        'FontWeight', 'normal');
+                else
+                    title(ax, 'Figure 11 | MEC load balance | Fitness 2 (load-aware)', ...
+                        'FontWeight', 'normal');
+                end
+            end
+            if numel(unique([rows.sample_count])) == 1 && rows(1).sample_count > 1
+                detail = sprintf('Mean +/- 1 SD across %d independent seeds', rows(1).sample_count);
+            else
+                detail = 'Mean across seeds; whiskers: +/- 1 SD when n > 1';
+            end
+            if isZoomed
+                detail = [detail ' | Y-axis zoomed (Jain is bounded by 0 and 1)'];
+            end
+            if anyNoMec
+                detail = [detail ' | WARNING: zero MEC busy time is assigned Jain=1 by baseline code'];
+                warning('Figure 11: at least one run has zero MEC busy time; Jain=1 is a code convention, not meaningful load balance.');
+            end
+            annotation(f, 'textbox', [.085 .055 .86 .06], 'String', detail, ...
+                'EdgeColor', 'none', 'HorizontalAlignment', 'center', ...
+                'FontName', 'Times New Roman', 'FontSize', 10);
+            % Do not modify the objective, all algorithms, or article plots.
+
         case 'figure_8'
             f = newFigure([100 100 1100 470]);
             t = tiledlayout(f, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
@@ -348,18 +441,6 @@ function st = algorithmStyle(name, index)
             st.color = [0.80 0.10 0.35];
             st.marker = 'x';
             st.lineStyle = '-';
-        case 'dcpo_base'
-            st.color = [0.40 0.40 0.40];
-            st.marker = 'x';
-            st.lineStyle = ':';
-        case 'dcpo_criticality'
-            st.color = [0.95 0.55 0.20];
-            st.marker = 'v';
-            st.lineStyle = '-.';
-        case 'dcpo_cache'
-            st.color = [0.00 0.65 0.55];
-            st.marker = '>';
-            st.lineStyle = '-.';
         case 'puma'
             st.color = [0.90 0.35 0.25];
             st.marker = 'd';
@@ -373,8 +454,8 @@ function st = algorithmStyle(name, index)
 end
 
 function s = label(n)
-    names = {'dcsga', 'gwo', 'gpc', 'cpo', 'dcpo_base', 'dcpo_criticality', 'dcpo_cache', 'puma'};
-    labels = {'DCSGA/Cuckoo', 'D-GWO', 'D-GPC', 'DCC-DCPO', 'DCPO-base', 'DCPO+C', 'DCPO+K', 'D-Puma'};
+    names = {'dcsga', 'gwo', 'gpc', 'cpo', 'puma'};
+    labels = {'DCSGA/Cuckoo', 'D-GWO', 'D-GPC', 'CPO', 'D-Puma'};
     ix = find(strcmp(n, names), 1);
     if isempty(ix)
         s = n;

@@ -3,9 +3,12 @@ function data = loadDataset(path)
     if nargin == 0
         path = fullfile(fileparts(fileparts(fileparts(mfilename('fullpath')))), 'data', 'dataset.json');
     end
-    if exist(path, 'dir')
-        path = fullfile(fileparts(path), 'dataset.json');
+    % Accept either the JSON filename or the directory containing it.
+    % fileparts(path) would incorrectly jump to the parent of data/.
+    if isfolder(path)
+        path = fullfile(path, 'dataset.json');
     end
+    assert(isfile(path), 'Dataset file not found: %s', char(path));
     data = jsondecode(fileread(path));
     data.params = struct();
     for i = 1:numel(data.parameters)
