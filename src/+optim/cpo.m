@@ -172,6 +172,7 @@ function child = articleCandidate(which, parentIndex, population, scores, X, bes
     K = size(X, 2);
     x = X(parentIndex, :);
     choose = @() rng.randbelow(N) + 1;
+    u = []; % Projection mask only; Sound/Odor populate their existing U.
 
     if which == 1  % Sight: Eqs. (4)-(5)
         j = choose();
@@ -224,7 +225,7 @@ function child = articleCandidate(which, parentIndex, population, scores, X, bes
         replacement = articleRandomVector(rng, nnz(outside));
         trial(outside) = replacement;
     end
-    child = articleProject(trial, population(parentIndex, :), bestPlan, which, progress, ctx, offsets, cache, rng);
+    child = articleProject(trial, population(parentIndex, :), bestPlan, which, progress, ctx, offsets, cache, rng, u);
 end
 
 function values = articleRandomVector(rng, n)
@@ -234,69 +235,86 @@ function values = articleRandomVector(rng, n)
     end
 end
 
-function plan = articleProject(trial, parent, bestPlan, which, progress, ctx, offsets, cache, rng)
-    % VEFC-specific categorical projection of the ORIGINAL continuous CPO
-    % trial.  The CPO defense formulas are unchanged before this point.
-    %
-    % A full per-task argmax changes too many DAG-coupled assignments at
-    % once and can destroy a good greedy schedule.  Project to a bounded
-    % number of provider edits (trust-region/Hamming projection) instead.
-    % The radius is a projection parameter, NOT a CPO/ACCPO equation.
+function plan = articleProject(trial, parent, bestPlan, which, progress, ctx, offsets, cache, rng, u)
+    % Positive-margin categorical projection (VEFC-specific, not a CPO formula).
+    % Preserve the original projection anchors: Parent for Sight/Sound;
+    % Best for Odor/Physical.  No fitness values are used here.
     D = ctx.dimension;
     if which <= 2
-        anchor = parent;       % Exploration near the current individual.
+        anchor = parent;
     else
-        anchor = bestPlan;     % Exploitation around the best known plan.
+        anchor = bestPlan;
     end
     plan = anchor;
     alternative = anchor;
     margin = -inf(1, D);
     mutable = zeros(1, D);
     nMutable = 0;
+
+    % Sound/Odor use exactly the U mask drawn in their defense equations.
+    % Sight/Physical do not have a U mask: all provider alternatives qualify.
+    if isempty(u)
+        u = true(1, numel(trial));
+    end
+    assert(numel(u) == numel(trial), 'CPO projection: mask size mismatch');
+
     for g = 1:D
         dom = ctx.domain{ctx.optimTaskIds(g)};
         if numel(dom) <= 1
             continue
         end
         currentIdx = find(dom == anchor(g), 1);
-        assert(~isempty(currentIdx), 'CPO article: anchor outside task domain');
-        q = trial(offsets(g)+1:offsets(g+1));
+        assert(~isempty(currentIdx), 'CPO projection: anchor outside task domain');
+        from = offsets(g) + 1;
+        to = offsets(g+1);
+        q = trial(from:to);
         anchorScore = q(currentIdx);
-        q(currentIdx) = -inf;
+        eligible = logical(u(from:to));
+        eligible(currentIdx) = false; % Never re-select the existing provider.
+        q(~eligible) = -inf;
         [altScore, altIdx] = max(q);
+        if ~isfinite(altScore)
+            continue % No alternative allowed by the defense's U mask.
+        end
+        gain = altScore - anchorScore;
+        if gain <= 0
+            continue % The existing provider is at least as good: no edit.
+        end
         alternative(g) = dom(altIdx);
-        margin(g) = altScore - anchorScore;
+        margin(g) = gain;
         nMutable = nMutable + 1;
         mutable(nMutable) = g;
     end
     mutable = mutable(1:nMutable);
     if nMutable == 0
-        return
+        return % No positive-margin changes; keep the existing anchor.
     end
 
+    % Keep the pre-existing per-defense Hamming radius and edit-count rule.
     progress = max(0, min(1, progress));
     scale = max(2, min(6, ceil(log2(D + 1))));
-    if which == 1                  % Sight: wider exploratory neighborhoods.
+    if which == 1
         maxEdits = 1 + round((scale - 1) * (1 - progress));
-    elseif which == 2              % Sound: moderate exploration.
+    elseif which == 2
         maxEdits = 1 + round((min(5, scale) - 1) * (1 - progress));
-    elseif which == 3              % Odor: gradually localize around best.
+    elseif which == 3
         maxEdits = 1 + round(2 * (1 - progress));
-    else                           % Physical attack: one-task refinement.
+    else
         maxEdits = 1;
     end
     maxEdits = max(1, min(nMutable, maxEdits));
     editCount = 1 + rng.randbelow(maxEdits);
 
-    % Prefer task/provider changes with stronger CPO-derived evidence,
-    % while retaining a nonzero chance of exploring every mutable task.
-    evidence = margin(mutable);
-    evidence = max(-2, min(2, evidence));
-    weights = .1 + exp(2.5 * (evidence - max(evidence)));
-    sampleCount = min(nMutable, maxEdits);
-    order = optim.OptimizerCommon.weighted(mutable, weights, sampleCount, rng);
+    % Select tasks deterministically by largest strictly positive margin.
+    % Tie-break by task index to avoid any additional random selection.
+    gains = margin(mutable);
+    [~, rank] = sortrows([-gains(:), mutable(:)], [1 2]);
+    order = mutable(rank);
     candidate = anchor;
     for k = 1:numel(order)
+        if k > maxEdits
+            break
+        end
         g = order(k);
         candidate(g) = alternative(g);
         if k >= editCount && ~isKey(cache, optim.OptimizerCommon.key(candidate))
@@ -304,27 +322,7 @@ function plan = articleProject(trial, parent, bestPlan, which, progress, ctx, of
             return
         end
     end
-
-    % Only if local proposals are already in the evaluation cache, try
-    % uncached single-task alternatives. No extra fitness calls are made.
-    for k = 1:nMutable
-        g = mutable(k);
-        dom = ctx.domain{ctx.optimTaskIds(g)};
-        q = trial(offsets(g)+1:offsets(g+1));
-        [~, rank] = sort(q, 'descend');
-        for j = reshape(rank, 1, [])
-            if dom(j) == anchor(g)
-                continue
-            end
-            candidate = anchor;
-            candidate(g) = dom(j);
-            if ~isKey(cache, optim.OptimizerCommon.key(candidate))
-                plan = candidate;
-                return
-            end
-        end
-    end
-    % All considered assignments have already been evaluated.
+    % Every permitted ranked prefix is cached; do NOT force a non-positive
+    % provider change merely to create a new evaluation.
     plan = anchor;
 end
-

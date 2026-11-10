@@ -21,7 +21,7 @@ results/
 *.temp
 *.bak
 ~$*
-trash/
+
 # IDE / OS
 .vscode/
 .idea/
@@ -32,3 +32,4 @@ Desktop.ini
 # Local/private notes
 notes.local.*
 *.local
+trash/
