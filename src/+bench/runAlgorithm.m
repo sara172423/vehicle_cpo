@@ -7,6 +7,11 @@ function [x, ev, h, ctx] = runAlgorithm(name, ctx, cfg)
         case 'cpo'
             [x, ev, h] = optim.cpo(ctx, cfg);
 
+        case {'dcpo', 'dcpo_base', 'dcpo_criticality', 'dcpo_cache'}
+            dcpoCfg = cfg;
+            dcpoCfg.variant = name;
+            [x, ev, h] = optim.dcpo(ctx, dcpoCfg);
+
         case 'gpc'
             [x, ev, h] = optim.gpc(ctx, cfg);
 

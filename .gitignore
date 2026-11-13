@@ -32,4 +32,4 @@ Desktop.ini
 # Local/private notes
 notes.local.*
 *.local
-trash/
+/trash

@@ -21,7 +21,7 @@ function cfg = validateConfig(cfg, d)
     cfg.figure = f;
 
     % Supported optimizer family after cleanup:
-    % Cuckoo/DCSGA, full/ablated CPO, GPC, GWO and Puma.
+    % Cuckoo/DCSGA, one-hot CPO, direct-discrete DCPO (and ablations), GPC, GWO and Puma.
     if isempty(cfg.algorithms)
         cfg.algorithms = {'dcsga'};
     elseif ischar(cfg.algorithms) || isstring(cfg.algorithms)
@@ -36,7 +36,7 @@ function cfg = validateConfig(cfg, d)
         end
     end
     cfg.algorithms = unique(cfg.algorithms, 'stable');
-    validAlgorithms = {'dcsga', 'cpo', 'gpc', 'gwo', 'puma'};
+    validAlgorithms = {'dcsga', 'cpo', 'dcpo', 'dcpo_base', 'dcpo_criticality', 'dcpo_cache', 'gpc', 'gwo', 'puma'};
     assert(all(ismember(cfg.algorithms, validAlgorithms)), 'Unsupported algorithm');
 
     % Only two active scientific fitnesses are retained.

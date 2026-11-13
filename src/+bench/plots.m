@@ -441,6 +441,22 @@ function st = algorithmStyle(name, index)
             st.color = [0.80 0.10 0.35];
             st.marker = 'x';
             st.lineStyle = '-';
+        case 'dcpo'
+            st.color = [0.10 0.35 0.75];
+            st.marker = 'p';
+            st.lineStyle = '-.';
+        case 'dcpo_base'
+            st.color = [0.35 0.35 0.35];
+            st.marker = 'v';
+            st.lineStyle = ':';
+        case 'dcpo_criticality'
+            st.color = [0.55 0.25 0.70];
+            st.marker = 'h';
+            st.lineStyle = '--';
+        case 'dcpo_cache'
+            st.color = [0.15 0.60 0.60];
+            st.marker = '>';
+            st.lineStyle = '--';
         case 'puma'
             st.color = [0.90 0.35 0.25];
             st.marker = 'd';
@@ -454,8 +470,11 @@ function st = algorithmStyle(name, index)
 end
 
 function s = label(n)
-    names = {'dcsga', 'gwo', 'gpc', 'cpo', 'puma'};
-    labels = {'DCSGA/Cuckoo', 'D-GWO', 'D-GPC', 'CPO', 'D-Puma'};
+    names = {'dcsga', 'gwo', 'gpc', 'cpo', 'dcpo', ...
+             'dcpo_base', 'dcpo_criticality', 'dcpo_cache', 'puma'};
+    labels = {'DCSGA/Cuckoo', 'D-GWO', 'D-GPC', 'CPO (one-hot)', ...
+              'DCPO (direct-discrete)', 'DCPO-base', ...
+              'DCPO-criticality', 'DCPO-cache', 'D-Puma'};
     ix = find(strcmp(n, names), 1);
     if isempty(ix)
         s = n;

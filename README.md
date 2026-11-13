@@ -14,7 +14,11 @@ Only the optimizer families currently used in this project are enabled:
 | MATLAB ID | Meaning |
 |---|---|
 | `dcsga` (alias: `cuckoo`) | Paper-aligned discrete Cuckoo / DCSGA baseline |
-| `cpo` | Paper-based CPO defense equations with VEFC-specific categorical projection |
+| `cpo` | Paper-based continuous CPO defense equations with VEFC-specific one-hot categorical projection |
+| `dcpo` | Restored direct-discrete CPO for VEFC (no one-hot encoding/decoder) |
+| `dcpo_base` | DCPO ablation without criticality, cache, success-memory or model guidance |
+| `dcpo_criticality` | DCPO ablation retaining criticality guidance only |
+| `dcpo_cache` | DCPO ablation retaining cache guidance only |
 | `gwo` | Discrete Grey Wolf Optimizer |
 | `gpc` | Discrete Giza Pyramids Construction optimizer |
 | `puma` | Discrete Puma Optimizer |
@@ -80,7 +84,7 @@ To test a new temporary fitness:
 config/defaultConfig.m        Main configuration
 data/dataset.json             VEFC simulation dataset
 src/+bench/                   Runner, validation, statistics, plots, export
-src/+optim/                   Cuckoo, CPO, GPC, GWO, Puma
+src/+optim/                   Cuckoo, CPO, DCPO, GPC, GWO, Puma
 src/+vefc/                    Context, evaluator, formulas, fitness library
 src/+monarch/Model.m          Ported numerical model utilities
 run_experiment.m              Main experiment entry point
@@ -107,7 +111,7 @@ Use a common NFE budget:
 cfg = defaultConfig();
 cfg.figure = 'figure_6';
 cfg.experimentMode = 'fair_optimizer_comparison';
-cfg.algorithms = {'dcsga','cpo','gpc','gwo','puma'};
+cfg.algorithms = {'dcsga','cpo','dcpo','gpc','gwo','puma'};
 cfg.fitnesses = {'fitness_1'};
 cfg.repetitions = 5;
 cfg.seedStart = 10001;
@@ -229,7 +233,7 @@ run both, pass both IDs: separate `fitness_1/figure_11.png` and
 startup
 cfg = defaultConfig();
 cfg.figure = 'figure_11';
-cfg.algorithms = {'dcsga','cpo','gpc','gwo','puma'};
+cfg.algorithms = {'dcsga','cpo','dcpo','gpc','gwo','puma'};
 cfg.fitnesses = {'fitness_1','fitness_load_aware'};  % Or choose one
 cfg.experimentMode = 'fair_optimizer_comparison';
 cfg.maxFunctionEvaluations = 1000;
@@ -253,10 +257,64 @@ Figure 11 warns when such runs occur. Do not compare the numerical values
 of different fitness objective functions to choose a winner.
 
 
-## CPO implementation and archived variant (2026-11-08)
+## CPO and DCPO implementations
 
-`src/+optim/cpo.m` is now the former article-based implementation previously named `cpo_article.m`. It applies the paper-based CPO defense update equations in a continuous one-hot embedding, followed by a VEFC-specific categorical projection. The projection is a bounded-edit/Hamming-neighborhood rule; it is an adaptation for the VEFC assignment problem, not an equation from the CPO paper.
+The project now keeps two independent CPO-family optimizers active:
 
-The former discrete VEFC-specific implementation of `cpo.m` has been preserved, without changing its source code, at `trash/cpo.m`. It is archived and is not dispatched by the active benchmark runner. Its `dcpo_base`, `dcpo_criticality`, and `dcpo_cache` variants are therefore no longer active algorithm IDs.
+### `cpo` — continuous CPO with one-hot projection
 
-The active CPO retains immediate one-parent/one-child greedy acceptance after each NEW fitness evaluation, and uses the shared VEFC linear defense schedule from `optim.cpoDefenseSchedule` (25/25/40/10 initially, moving to 5/5/15/75). This is not the fixed defense schedule of the original CPO paper. The implementation is not a complete reproduction of the original continuous CPO: the one-hot representation, categorical projection, initialization, NFE clock, population handling, and some adaptation choices remain problem-specific. No System Model, evaluator, dataset, cache, fitness, or Cuckoo implementation was changed in this reorganization.
+`src/+optim/cpo.m` is the article-based implementation previously named
+`cpo_article.m`. It applies the paper-based CPO defense update equations in a
+continuous one-hot embedding, followed by a VEFC-specific categorical
+projection. The projection is a positive-margin/bounded-edit rule; it is a
+VEFC adaptation, not an equation from the original CPO paper.
+
+### `dcpo` — direct-discrete CPO for VEFC
+
+`src/+optim/dcpo.m` restores the former discrete VEFC-specific implementation
+that had been archived as `trash/cpo.m`. The public MATLAB function is now
+`optim.dcpo`, and the benchmark IDs are `dcpo`, `dcpo_base`,
+`dcpo_criticality`, and `dcpo_cache`.
+
+DCPO stores one feasible provider choice per ranked task directly in the
+decision vector. It does not use one-hot encoding or a continuous-to-discrete
+decoder. Its four VEFC-specific discrete defenses use peer/best assignments,
+provider-domain checks, task criticality, DAG reachability, service type,
+cache affinity, elite-provider voting, and (for the full `dcpo`) success memory
+and model guidance. Candidate assignments are evaluated by the unchanged
+`vefc.Evaluator`.
+
+The optional ablation IDs are:
+- `dcpo_base`: disables criticality, cache, success-memory, model and deadline guidance;
+- `dcpo_criticality`: keeps criticality guidance while disabling cache, memory, model and deadline guidance;
+- `dcpo_cache`: keeps cache guidance while disabling criticality, memory, model and deadline guidance.
+
+Both `cpo` and `dcpo` use the shared VEFC linear defense schedule in
+`optim.cpoDefenseSchedule` (25/25/40/10 initially, moving to 5/5/15/75), and
+the shared immediate one-parent/one-child greedy acceptance helper in
+`optim.cpoParentAccept`. This is a VEFC schedule, not the fixed defense
+probabilities of the original CPO paper.
+
+### Fair CPO-versus-DCPO comparison
+
+```matlab
+startup
+cfg = defaultConfig();
+cfg.figure = 'figure_6';
+cfg.experimentMode = 'fair_optimizer_comparison';
+cfg.algorithms = {'cpo','dcpo'};
+cfg.fitnesses = {'fitness_1'};
+cfg.repetitions = 5;
+cfg.seedStart = 10001;
+cfg.populationSize = 50;
+cfg.tmax = 200;
+cfg.maxFunctionEvaluations = 1000;
+cfg.outputDir = fullfile(pwd,'results','cpo_vs_dcpo');
+results = run_experiment(cfg);
+```
+
+To run DCPO ablations under the same NFE/seed settings, select
+`{'dcpo','dcpo_base','dcpo_criticality','dcpo_cache'}` in `cfg.algorithms`.
+No System Model, evaluator, dataset, cache, fitness, or Cuckoo implementation
+was changed when DCPO was restored.
+
